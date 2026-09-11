@@ -250,13 +250,17 @@ There is deliberately no "force export anyway" button.
 
 ## Examples
 
-`example/` contains a runnable sample set:
+`example/` contains a runnable sample set, provided in two languages. Both sets
+have the same structure and the same field names — only the human-readable text
+(comments, sample data, `tiny` sheet headers) differs.
 
 ```
 example/
-├── import/     source workbooks
-├── client/     generated for the client
-└── server/     generated for the server
+├── en/
+│   ├── import/     source workbooks
+│   ├── client/     generated for the client
+│   └── server/     generated for the server
+└── zh-CN/          the same set with Chinese comments and sample data
 ```
 
 | Workbook | Shows |
@@ -267,13 +271,15 @@ example/
 | `04_edge_cases.xlsx` | multi-line text, text containing `]]`, text ending with `]`, the empty-cell vs blank-text contrast, booleans, scientific notation, a custom file header/footer |
 
 Open the workbooks next to their generated `.lua` output — e.g.
-`import/01_types_and_scopes.xlsx` → `client/cfg_example_item.lua`. The same table
-produces different files on each side because of `scope`.
+`en/import/01_types_and_scopes.xlsx` → `en/client/cfg_example_item.lua`. The same
+table produces different files on each side because of `scope`.
 
-Regenerate everything with:
+Regenerate them with:
 
 ```bash
-python tools/make_examples.py
+python tools/make_examples.py            # both languages
+python tools/make_examples.py en         # English only
+python tools/make_examples.py zh-CN      # Chinese only
 ```
 
 The generator script doubles as executable documentation of the layout.
@@ -311,10 +317,10 @@ gui/
   main_window.py            the Tkinter UI
   platform_compat.py        Windows / macOS differences (fonts, config dir, svn)
 tools/
-  make_examples.py          regenerates example/
+  make_examples.py          regenerates example/ (en / zh-CN)
   compare_export.py         structural diff of two export directories
   luaparse.py               minimal Lua parser used by compare_export.py
-example/                    sample workbooks and their generated output
+example/                    sample workbooks and their generated output (en / zh-CN)
 table_exporter.spec         PyInstaller build description
 ```
 

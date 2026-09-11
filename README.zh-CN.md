@@ -228,13 +228,16 @@ key 列，在客户端文件里照样当 key 用。同一条 key 出现两次时
 
 ## 示例
 
-`example/` 是一套可直接运行的样例：
+`example/` 是一套可直接运行的样例，中英文各一份。两份的表结构和字段名完全相同，
+只有"给人看的文字"不同（表内注释、单元格里的示例数据、`tiny` 表头）。
 
 ```
 example/
-├── import/     源工作簿
-├── client/     导给客户端的结果
-└── server/     导给服务端的结果
+├── en/
+│   ├── import/     源工作簿
+│   ├── client/     导给客户端的结果
+│   └── server/     导给服务端的结果
+└── zh-CN/          同样一套，注释与示例数据是中文
 ```
 
 | 工作簿 | 演示内容 |
@@ -245,13 +248,15 @@ example/
 | `04_edge_cases.xlsx` | 多行文本、含 `]]` 的文本、以 `]` 结尾的文本、"空着"与"只有空格"的对比、布尔值、科学计数、自定义文件头尾 |
 
 把工作簿和它旁边的产物对照着看即可，例如
-`import/01_types_and_scopes.xlsx` → `client/cfg_example_item.lua`。同一张表因为
+`en/import/01_types_and_scopes.xlsx` → `en/client/cfg_example_item.lua`。同一张表因为
 `scope` 不同，在两侧生成的文件内容并不一样。
 
-想重新生成全部示例：
+想重新生成示例：
 
 ```bash
-python tools/make_examples.py
+python tools/make_examples.py            # 中英两套都生成
+python tools/make_examples.py en         # 只生成英文
+python tools/make_examples.py zh-CN      # 只生成中文
 ```
 
 这个生成脚本本身就是一份可执行的格式说明。
@@ -289,7 +294,7 @@ tools/
   make_examples.py          重新生成 example/
   compare_export.py         两个导出目录的结构化对拍
   luaparse.py               compare_export.py 用的极简 Lua 解析器
-example/                    示例工作簿与它们的产物
+example/                    示例工作簿与它们的产物（en / zh-CN）
 table_exporter.spec         PyInstaller 打包描述
 ```
 
