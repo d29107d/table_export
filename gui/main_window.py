@@ -102,6 +102,35 @@ def save_projects(data):
 
 DARK_THEMES = {"darkly", "cyborg", "solar", "superhero", "vapor", "simplex"}
 
+#: ttkbootstrap 1.x 的主题名 → 2.x 的等价名。
+#:
+#: 1.x 的名字（litera / darkly …）在 2.2 仍能被 ``theme_use`` 加载，所以旧配置
+#: 里存着它们并不会报错；但它们**不出现在 ``theme_names()`` 里**。而主题菜单是照
+#: ``theme_names()`` 生成的 —— 于是"当前主题"压根不在菜单选项里，一项都勾不上。
+#: 读配置时归一化掉，顺带也不再触发库的 DeprecationWarning。
+#:
+#: 只映射有确定对应关系的两个（1.x 的默认浅色 / 暗色），其余旧名一律回落默认，
+#: 不猜 —— 猜错会把用户主题换成另一个样子。
+LEGACY_THEME_MAP = {
+    "litera": "bootstrap-light",
+    "darkly": "bootstrap-dark",
+}
+#: 配置缺失 / 主题名不认识时的默认主题
+DEFAULT_THEME = "bootstrap-light"
+
+
+def normalize_theme(name):
+    """把配置里的主题名收敛成 ttkbootstrap 2.x 的可用名字。
+
+    纯字符串处理，不依赖 Tk，所以可以在创建窗口**之前**调用
+    （``ttkb.Window(themename=...)`` 之前就得定下来）。
+    """
+    if name in LEGACY_THEME_MAP:
+        return LEGACY_THEME_MAP[name]
+    if isinstance(name, str) and (name.endswith("-light") or name.endswith("-dark")):
+        return name
+    return DEFAULT_THEME
+
 
 def _is_dark_theme(name):
     """判断主题是否为暗色。
@@ -155,7 +184,9 @@ _DIALOG_MAX_ERRORS = 10
 class MainWindow:
     def __init__(self, root, initial_theme="bootstrap-light", initial_language=None):
         self.root = root
-        self.current_theme = initial_theme
+        # 归一化：旧配置里的 1.x 主题名（litera/darkly）换成 2.x 等价名，
+        # 否则主题菜单按 theme_names() 生成，当前主题一项都勾不上。
+        self.current_theme = normalize_theme(initial_theme)
         self.projects_data = load_projects()
         #: 界面语言：优先用调用方给的（main.py 已经读过一次配置），其次配置文件，
         #: 都没有就是英文。记在 projects.json 顶层，与 sort_by 同级。
@@ -178,7 +209,7 @@ class MainWindow:
         # 兜底：Tk 回调里抛出的异常不再让窗口"无声消失"
         root.report_callback_exception = self._on_callback_exception
 
-        self._is_dark = _is_dark_theme(initial_theme)
+        self._is_dark = _is_dark_theme(self.current_theme)
         self._update_theme_colors()
         self.root.configure(bg=self.BG)
 
@@ -396,14 +427,33 @@ class MainWindow:
         if hasattr(self, "progress_label") and self.progress_var.get() == 0:
             self.progress_label.config(text=t("status.ready"))
 
+    def _theme_names(self):
+        """菜单要列出的主题名，并保证 ``current_theme`` 一定在其中。
+
+        ``theme_names()`` 是库给的可用列表，但配置里可能残留一个它不认识的名字
+        （手工改坏、或更旧的版本写入）。照搬列表的话，当前主题不在选项里，
+        菜单里就一项都勾不上 —— 补进去，至少勾选与实际状态一致。
+        """
+        names = list(ttk.Style().theme_names())
+        if self.current_theme and self.current_theme not in names:
+            names.insert(0, self.current_theme)
+        return names
+
     def _rebuild_theme_menu(self):
+        """按可选主题重建菜单。
+
+        所有单选按钮必须共用**同一个** ``StringVar``：各用各的变量时它们之间
+        毫无关联，Tk 无从判断哪一项该显示勾选标记 —— 菜单里就永远没有一项是勾上的。
+        """
         self.theme_menu.delete(0, tk.END)
-        style = ttk.Style()
-        for name in style.theme_names():
+        if getattr(self, "theme_var", None) is None:
+            self.theme_var = tk.StringVar(self.root)
+        self.theme_var.set(self.current_theme)
+        for name in self._theme_names():
             self.theme_menu.add_radiobutton(
                 label=name,
                 command=lambda n=name: self._switch_theme(n),
-                variable=tk.StringVar(value=self.current_theme),
+                variable=self.theme_var,
                 value=name,
             )
 
@@ -411,6 +461,10 @@ class MainWindow:
         try:
             ttk.Style().theme_use(name)
             self.current_theme = name
+            # 菜单之外还有别的入口（快捷键、顶部那个明暗切换按钮），
+            # 所以这里显式同步变量，别只依赖点菜单时 Tk 自动改值。
+            if getattr(self, "theme_var", None) is not None:
+                self.theme_var.set(name)
             self._is_dark = _is_dark_theme(name)
             self._update_theme_colors()
             self._save_theme(name)

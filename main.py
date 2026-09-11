@@ -8,16 +8,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ttkbootstrap as ttkb
 from ttkbootstrap.constants import INFO, WARNING, SUCCESS, DANGER, PRIMARY
 
-from gui.main_window import CONFIG_PATH, MainWindow
+from gui.main_window import CONFIG_PATH, DEFAULT_THEME, MainWindow, normalize_theme
 from gui.platform_compat import IS_MAC, config_dir
 
 from core.i18n import language_from_config, set_language, t
-
-#: 首启 / theme.json 缺失时的默认主题。用 ttkbootstrap 2.x 的主题名：1.x 的
-#: litera / darkly 在 2.2 属 legacy 名，能用但会打 DeprecationWarning 且 3.0 会移除。
-DEFAULT_THEME = "bootstrap-light"
-#: 与 DEFAULT_THEME 配对的暗色主题（供切换用）
-DARK_THEME = "bootstrap-dark"
 
 
 #: 主题偏好与 projects.json 放同一个目录（macOS 在 Application Support 下，
@@ -26,11 +20,16 @@ THEME_PATH = os.path.join(config_dir(), "theme.json")
 
 
 def load_theme():
+    """读取主题偏好。
+
+    要做一次归一化：旧配置里可能存着 ttkbootstrap 1.x 的遗留名（litera / darkly），
+    它们能被加载、但不在 ``theme_names()`` 里 —— 主题菜单照那个列表生成，
+    留着旧名会导致"当前主题"一项都勾不上，还会打 DeprecationWarning。
+    """
     if os.path.exists(THEME_PATH):
         try:
             with open(THEME_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                return data.get("theme", DEFAULT_THEME)
+                return normalize_theme(json.load(f).get("theme"))
         except Exception:
             pass
     return DEFAULT_THEME
