@@ -1,24 +1,28 @@
 #!/usr/bin/env python
-"""导表对拍工具：把当前 core 的导出结果与目标目录里的旧产物做结构化对比。
+"""Export comparison tool: structurally compares the current core output against the
+legacy artifacts left in the target directories.
 
-用途：旧导表工具没有源码，但它在目标目录留下了产物。改动 core 的导出逻辑后，
-用这个脚本确认新输出与旧产物「功能等价」（顺序无关，只看数据结构）。
+Why: the legacy exporter has no source code, but it left its output behind. After
+changing the export logic in ``core``, run this script to confirm that the new output
+is "functionally equivalent" to the old artifacts (order-independent, structure only).
 
-用法：
-    python tools/compare_export.py [源目录] [客户端目录] [服务端目录]
+Usage:
+    python tools/compare_export.py [source dir] [client dir] [server dir]
 
-三个目录的取值优先级（前者优先）：
-    1. 命令行参数
-    2. 环境变量 ``COMPARE_SRC`` / ``COMPARE_CLI`` / ``COMPARE_SRV``
-    3. 脚本同目录下的 ``compare_paths.json``——本机路径，**不入库**，
-       格式 ``{"src": "...", "cli": "...", "srv": "..."}``
+Where each directory comes from (first one wins):
+    1. command line argument
+    2. environment variable ``COMPARE_SRC`` / ``COMPARE_CLI`` / ``COMPARE_SRV``
+    3. ``compare_paths.json`` next to this script - machine-local paths, **not
+       committed**, format ``{"src": "...", "cli": "...", "srv": "..."}``
 
-输出分类：
-  - 结构完全一致
-  - 差异（缺字段 / 多字段 / 值不同 / 顶层 key 不同）
-  - 源表已改名的陈旧产物（旧产物注释里的源文件名与当前 xlsx 不一致）
-  - 无源表的孤儿文件（目标目录里存在但源目录已没有对应 sheet）
-  - 解析错误
+Output categories:
+  - structurally identical
+  - differences (missing field / extra field / different value / different top-level key)
+  - stale artifacts whose source sheet was renamed (the source file name in the old
+    artifact's comment no longer matches the current xlsx)
+  - orphan files with no source sheet (present in the target directory, but no sheet
+    in the source directory matches)
+  - parse errors
 """
 
 import os
@@ -36,16 +40,16 @@ from core.excel_reader import load_excel, list_excel_files
 from core.lua_writer import generate_lua
 from luaparse import parse_lua, Dup
 
-#: 本机路径文件（不入库）：{"src": ..., "cli": ..., "srv": ...}
+#: Machine-local path file (not committed): {"src": ..., "cli": ..., "srv": ...}
 LOCAL_PATHS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 'compare_paths.json')
 
-#: 目标目录里不参与对比的文件/目录
+#: Files / directories in the target dir that are not compared
 IGNORE_FILES = {'cfg_init.lua'}
 
 
 def resolve_dir(argv_index, env_name, json_key):
-    """按 命令行参数 > 环境变量 > compare_paths.json 的顺序取一个目录。"""
+    """Resolve one directory: command line > environment variable > compare_paths.json."""
     if len(sys.argv) > argv_index:
         return sys.argv[argv_index]
     from_env = os.environ.get(env_name)
@@ -69,7 +73,7 @@ def read_text(path):
 
 
 def header_comment(text):
-    """取首行里的 ``--[[ 源.xlsx -> 页 ]]`` 注释，用于识别源表改名。"""
+    """Extract the ``--[[ source.xlsx -> sheet ]]`` comment from the first line, used to spot a renamed source sheet."""
     i = text.find('--[[', 0, 400)
     if i < 0:
         return None
@@ -114,16 +118,16 @@ def main():
     srv = resolve_dir(3, 'COMPARE_SRV', 'srv')
 
     if not src:
-        print('未指定源目录。')
-        print('用法: python tools/compare_export.py [源目录] [客户端目录] [服务端目录]')
-        print('或设置环境变量 COMPARE_SRC / COMPARE_CLI / COMPARE_SRV，')
-        print('或在 tools/compare_paths.json 里写 '
-              '{"src": "...", "cli": "...", "srv": "..."}（该文件不入库）。')
+        print('No source directory given.')
+        print('Usage: python tools/compare_export.py [source dir] [client dir] [server dir]')
+        print('or set COMPARE_SRC / COMPARE_CLI / COMPARE_SRV,')
+        print('or write {"src": "...", "cli": "...", "srv": "..."} into '
+              'tools/compare_paths.json (that file is not committed).')
         return 1
 
     files = sorted(list_excel_files(src))
     if not files:
-        print('源目录里没有 xlsx：', src)
+        print('No xlsx in the source directory:', src)
         return 1
 
     with ThreadPoolExecutor(8) as ex:
@@ -160,7 +164,7 @@ def main():
             hc_old, hc_new = header_comment(old_text), header_comment(new_text)
             if hc_old and hc_new and hc_old != hc_new:
                 stats['stale_renamed'] += 1
-                stale.append(f'{tag}/{name}: 旧「{hc_old}」-> 新「{hc_new}」')
+                stale.append(f'{tag}/{name}: old "{hc_old}" -> new "{hc_new}"')
                 continue
             try:
                 old_struct = parse_lua(old_text)
@@ -181,28 +185,28 @@ def main():
                 stats['same'] += 1
                 ok_files.append(f'{tag}/{name}')
 
-    print('== 统计 ==')
+    print('== stats ==')
     for k, v in sorted(stats.items()):
         print(f'  {k}: {v}')
-    print(f'  结构完全一致: {stats["same"]} 个')
+    print(f'  structurally identical: {stats["same"]}')
 
     print()
-    print('== 源表已改名的陈旧产物 ==', len(stale))
+    print('== stale artifacts whose source sheet was renamed ==', len(stale))
     for s in stale:
         print('  ', s)
 
     print()
-    print('== 无源表的孤儿文件 ==', len(orphans))
+    print('== orphan files without a source sheet ==', len(orphans))
     for o in orphans:
         print('  ', o)
 
     print()
-    print('== 解析错误 ==', len(parse_errs))
+    print('== parse errors ==', len(parse_errs))
     for e in parse_errs:
         print('  ', e)
 
     print()
-    print('== 差异明细 ==', len(problems))
+    print('== difference details ==', len(problems))
     for f, ps in problems.items():
         print(f'  {f}')
         for pp in ps[:4]:

@@ -70,6 +70,6 @@ def export_all(filepaths, client_dir, server_dir, client_encoding="utf-8", serve
 def _write_lua_file(output_dir, filename, content, encoding="utf-8"):
     os.makedirs(output_dir, exist_ok=True)
     filepath = os.path.join(output_dir, filename)
-    # 统一 CRLF，与旧工具产物一致（Lua 两种都认，但保持字节一致便于比对/SVN diff）
+    # Unify to CRLF, matching the legacy tool's output (Lua accepts either, but byte-identical files keep diffs and SVN noise down)
     with open(filepath, "w", encoding=encoding, newline="\r\n") as f:
         f.write(content)

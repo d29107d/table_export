@@ -1,24 +1,28 @@
-"""Lua 代码生成。
+"""Lua code generation.
 
-对齐旧导表工具的输出规则（均经过与目标目录旧产物逐表结构化对拍验证）：
+Mirrors the legacy exporter's output rules (all of them verified by structurally
+diffing every table against the legacy artifacts found in the target directories):
 
-- scope：``c`` = 仅客户端，``s`` = 仅服务端，``sc`` / ``cs`` = 前后端都要
-- key_count == 0：每行输出为一个匿名 table 元素 ``{ ... },``
-- key_count >= 1：按前 key_count 个字段逐层嵌套 ``[k1] = { [k2] = { ... } }``
-- key 列从"全部合法列"里取，不受 scope 过滤影响
-  （存在这样的表：key 字段自身是 ``s``（仅服务端），客户端不导出该字段，
-  但客户端文件里的 key 仍然用它）
-- 单元格为空（None）=> 该字段整体不输出；单元格是空字符串 => 按空值输出
-  （``number`` / ``any`` 写 ``nil``，``table`` 写 ``{}``）
-- 字段名必须是合法 lua 标识符，否则整列丢弃（表右侧常残留
-  ``{`` / ``,`` / ``★`` / ``地图`` 这类脏列，旧工具不导出它们）
-- 文件头与注释之间用两个制表符分隔
+- scope: ``c`` = client only, ``s`` = server only, ``sc`` / ``cs`` = both sides
+- key_count == 0: every row becomes an anonymous table element ``{ ... },``
+- key_count >= 1: nest level by level over the first key_count fields,
+  ``[k1] = { [k2] = { ... } }``
+- key columns are taken from "all valid columns" and are not affected by scope
+  filtering (some tables have their key field marked ``s`` (server only), so the
+  client does not export that field, yet the client file still uses it as key)
+- an empty cell (None) => the field is omitted entirely; an empty string => an
+  empty value is written (``nil`` for ``number`` / ``any``, ``{}`` for ``table``)
+- a field name must be a valid Lua identifier, otherwise the whole column is
+  dropped (the right-hand side of a sheet often carries junk columns such as a
+  duplicated ``id``, symbol-only columns, or orphan ``{`` / ``,`` / ``}`` tokens,
+  and the legacy tool drops them as well)
+- two tab characters separate the file header from the comment
 """
 
 import math
 import re
 
-#: 表示"前后端都要导出"的 scope 值（两种写法同义）
+#: Scope values meaning "export to both sides" (the two spellings are synonyms)
 SCOPE_BOTH = ("sc", "cs")
 
 _FIELD_NAME_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
@@ -26,17 +30,19 @@ _NUMERIC_RE = re.compile(r'^-?\d')
 
 
 def valid_field_name(name):
-    """字段名必须是合法 lua 标识符。
+    """A field name must be a valid lua identifier.
 
-    表右侧常残留脏数据块（重复的 ``id``、``★`` 之类的符号列，甚至 ``{`` / ``,`` / ``}``
-    这种把对象语法拆散的孤立符号），旧工具把这些列全部丢弃。
-    用标识符校验把它们一并挡掉，也保证写出来的 lua 不会语法错误。
+    Sheets often keep a block of junk on the right-hand side (duplicated ``id``
+    columns, symbol-only columns, or even orphan ``{`` / ``,`` / ``}`` tokens that
+    split the object syntax apart); the legacy tool dropped every one of them.
+    Validating identifiers rejects the same set and also guarantees that the lua
+    we write is syntactically valid.
     """
     return bool(name) and _FIELD_NAME_RE.match(name) is not None
 
 
 def _crlf(s):
-    """单元格里的换行统一成 CRLF（旧工具产物即为 CRLF）。"""
+    """In-cell line breaks are normalised to CRLF (the legacy tool's output is CRLF as well)."""
     return s.replace('\r\n', '\n').replace('\r', '\n').replace('\n', '\r\n')
 
 
@@ -45,16 +51,19 @@ def _is_blank_str(value):
 
 
 def _format_string(value):
-    """把文本写成 lua 长字符串字面量 ``[[...]]``。
+    """Write text as a lua long-string literal ``[[...]]``.
 
-    长括号里的内容**不做转义**，所以内容里的 ``]`` 会和收尾的 ``]]`` 互相干扰：
+    The content of a long bracket is **not escaped**, so a ``]`` inside it gets in
+    the way of the closing ``]]``:
 
-    - 内容含 ``]]`` → 提前闭合（``[[a]]b]]`` 只解析出 ``a``）
-    - 内容以 ``]`` 结尾 → 和收尾的 ``]]`` 连成 ``]]]``（``[[尾]]]`` 解析失败）
+    - content containing ``]]`` closes early (``[[a]]b]]`` only yields ``a``)
+    - content ending with ``]`` merges with the closing ``]]`` into ``]]]``
+      (``[[c]]]`` fails to parse)
 
-    因此按需逐层提升 ``=`` 的层数（``[[`` → ``[=[`` → ``[==[`` …），直到开闭
-    括号不会和内容里的 ``]`` 撞上为止。只在内容含 ``]`` 时才会升级层级，
-    普通文本的产物与旧工具完全一致。
+    The literal therefore raises its ``=`` level as needed (``[[`` -> ``[=[`` ->
+    ``[==[`` ...) until the delimiters cannot collide with any ``]`` in the
+    content. The level is only raised when the content contains ``]``, so plain
+    text stays byte-identical to the legacy tool's output.
     """
     if value is None:
         return '[[]]'
@@ -67,12 +76,12 @@ def _format_string(value):
 
 
 def _float_literal(value):
-    # inf / nan 在 Lua 里没有字面量，转不了（否则 int() 会抛 OverflowError/ValueError）
+    # inf / nan have no literal in Lua and cannot be converted (int() would raise OverflowError/ValueError)
     if not math.isfinite(value):
         return None
     if value == int(value) and abs(value) < 1e15:
         return str(int(value))
-    # %.15g 可以吃掉 Excel/浮点运算带来的二进制尾数噪声（如 969000.0000000001 -> 969000）
+    # %.15g swallows the binary-mantissa noise Excel and float math leave behind (969000.0000000001 -> 969000)
     s = '%.15g' % value
     if 'e' not in s and 'E' not in s and '.' in s:
         s = s.rstrip('0').rstrip('.')
@@ -80,10 +89,11 @@ def _float_literal(value):
 
 
 def to_number_literal(value):
-    """转成 lua 数字字面量；无法解析返回 None。
+    """Convert to a lua numeric literal; returns None when it cannot be parsed.
 
-    公开出来是给语法校验用的（``lua_syntax.validate_number``）——
-    校验必须和导出用**同一套判定**，否则会出现"校验说没问题、导出却是 nil"的矛盾。
+    Exposed for the syntax checker (``lua_syntax.validate_number``) - validation
+    must use **the same rule** as the exporter, otherwise we end up reporting
+    "validation passed" while the export silently wrote nil.
     """
     if isinstance(value, bool):
         return 'true' if value else 'false'
@@ -110,7 +120,7 @@ def _format_number(value):
     if isinstance(value, bool):
         return 'true' if value else 'false'
     n = to_number_literal(value)
-    # 旧工具对"填了空字符串但类型是 number"的单元格写 nil
+    # The legacy tool writes nil for a cell that is number-typed but holds an empty string
     return n if n is not None else 'nil'
 
 
@@ -139,11 +149,13 @@ def _format_value(value, type_str):
 
 
 def _format_key(value, type_str):
-    """把 key 字段格式化成 lua 字面量。
+    """Format a key field as a lua literal.
 
-    - ``number``：直接写数字（解析不出来时退化成 0，避免写出非法的 ``[nil]``）
-    - ``string``：加双引号
-    - 其它（例如源表里确实拿 ``{{5,1}}`` 这种 table 当 key）：原样输出
+    - ``number``: written as a number directly (falls back to 0 when it cannot be
+      parsed, so an invalid ``[nil]`` is never emitted)
+    - ``string``: wrapped in double quotes
+    - anything else (e.g. a source table really using ``{{5,1}}`` as a key): passed
+      through as-is
     """
     if type_str == "number":
         n = to_number_literal(value)
@@ -176,7 +188,7 @@ def _scope_filtered(indices, scopes, scope_filter):
 
 
 def _get_filtered_indices(scopes, field_names, scope_filter):
-    """本次导出真正要写出的列下标（已按字段名合法性与 scope 过滤）。"""
+    """Column indexes actually written by this export (already filtered by valid field name and scope)."""
     return _scope_filtered(_valid_indices(field_names), scopes, scope_filter)
 
 
@@ -191,7 +203,7 @@ def _emit_fields(lines, row, indices, types, field_names, depth):
 
 
 def _build_nested(rows, key_indices, types):
-    """按 key 逐层归组；同 key 后出现的行覆盖先出现的行（Lua table 语义）。"""
+    """Group level by level over the keys; a later row with the same key wins (Lua table semantics)."""
     data = {}
     for row in rows:
         parts = []

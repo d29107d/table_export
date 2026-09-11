@@ -31,12 +31,14 @@ from gui.platform_compat import (
 
 
 def _find_tortoise_proc():
-    """定位 TortoiseSVN 的 GUI 进程 TortoiseProc.exe；找不到返回 None。
+    """Locate TortoiseSVN's GUI process TortoiseProc.exe; returns None when it is missing.
 
-    查找顺序：PATH → 注册表（TortoiseSVN 安装时写入的 ``ProcPath``）→ 常见安装目录。
-    用它执行 update/commit 就会弹出 TortoiseSVN 自己的窗口，而不是命令行终端。
+    Lookup order: PATH -> registry (``ProcPath``, written by the TortoiseSVN
+    installer) -> common install directories. Running update/commit through it pops
+    TortoiseSVN's own window instead of a command-line terminal.
 
-    非 Windows 直接返回 None —— 省掉 macOS 上那次注定 ImportError 的 ``winreg``。
+    Returns None right away on non-Windows, which also avoids the ``winreg`` import
+    that is bound to fail on macOS.
     """
     if not IS_WIN:
         return None
@@ -73,11 +75,12 @@ def _find_tortoise_proc():
     return None
 
 
-#: 运行期配置目录。Windows 是 exe 同级的 config/（原样）；macOS 换到
-#: ~/Library/Application Support/ —— .app 内部是会签名的区域，不能往里写。
+#: Runtime config directory. Windows keeps the config/ next to the exe (unchanged);
+#: macOS moves to ~/Library/Application Support/ - the inside of a .app is a signed
+#: area and must not be written to.
 CONFIG_DIR = config_dir()
 CONFIG_PATH = os.path.join(CONFIG_DIR, "projects.json")
-#: 打包进包里的兜底配置（首次启动当模板）
+#: Fallback config bundled into the package (used as a template on first launch)
 FALLBACK_CONFIG = os.path.join(bundled_config_dir(), "projects.json")
 THEME_PATH = os.path.join(CONFIG_DIR, "theme.json")
 
@@ -102,28 +105,30 @@ def save_projects(data):
 
 DARK_THEMES = {"darkly", "cyborg", "solar", "superhero", "vapor", "simplex"}
 
-#: ttkbootstrap 1.x 的主题名 → 2.x 的等价名。
+#: ttkbootstrap 1.x theme name -> 2.x equivalent.
+#: The 1.x names (litera / darkly ...) can still be loaded by ``theme_use`` in 2.2,
+#: so an old config holding one does not raise; but they do **not** appear in
+#: ``theme_names()``. The theme menu is generated from ``theme_names()``, so the
+#: "current theme" would not be a menu entry at all and nothing could be checked.
+#: Normalising while reading the config also silences the library's
+#: DeprecationWarning.
 #:
-#: 1.x 的名字（litera / darkly …）在 2.2 仍能被 ``theme_use`` 加载，所以旧配置
-#: 里存着它们并不会报错；但它们**不出现在 ``theme_names()`` 里**。而主题菜单是照
-#: ``theme_names()`` 生成的 —— 于是"当前主题"压根不在菜单选项里，一项都勾不上。
-#: 读配置时归一化掉，顺带也不再触发库的 DeprecationWarning。
-#:
-#: 只映射有确定对应关系的两个（1.x 的默认浅色 / 暗色），其余旧名一律回落默认，
-#: 不猜 —— 猜错会把用户主题换成另一个样子。
+#: Only the two names with a certain mapping (1.x default light / dark) are mapped;
+#: every other legacy name falls back to the default instead of being guessed - a
+#: wrong guess would silently hand the user a different-looking theme.
 LEGACY_THEME_MAP = {
     "litera": "bootstrap-light",
     "darkly": "bootstrap-dark",
 }
-#: 配置缺失 / 主题名不认识时的默认主题
+#: Default theme when the config is missing or the theme name is unknown
 DEFAULT_THEME = "bootstrap-light"
 
 
 def normalize_theme(name):
-    """把配置里的主题名收敛成 ttkbootstrap 2.x 的可用名字。
+    """Collapse a configured theme name into a usable ttkbootstrap 2.x name.
 
-    纯字符串处理，不依赖 Tk，所以可以在创建窗口**之前**调用
-    （``ttkb.Window(themename=...)`` 之前就得定下来）。
+    Pure string handling without a Tk dependency, so it can be called **before** the
+    window is created (``ttkb.Window(themename=...)`` needs it settled up front).
     """
     if name in LEGACY_THEME_MAP:
         return LEGACY_THEME_MAP[name]
@@ -133,22 +138,24 @@ def normalize_theme(name):
 
 
 def _is_dark_theme(name):
-    """判断主题是否为暗色。
+    """Is the theme dark?
 
-    ``DARK_THEMES`` 是 ttkbootstrap 1.x 的遗留名 —— 2.2 里仍能用，但会打弃用警告，
-    且**不再出现在 ``theme_names()`` 里**。2.x 起主题改用 ``xxx-light`` /
-    ``xxx-dark`` 的命名约定（bootstrap-dark、nord-dark…），这些新暗色主题都不在
-    ``DARK_THEMES`` 中。只按旧集合判断的话，选了新暗色主题 ``self._is_dark`` 仍是
-    False，应用手绘的控件（Canvas / 列表行 / 日志 Text / 搜索框…）不会跟着变暗，
-    和 ttk 控件配色对不上。
+    ``DARK_THEMES`` holds ttkbootstrap 1.x legacy names - still usable in 2.2, but
+    they emit a deprecation warning and **no longer appear in ``theme_names()``**.
+    From 2.x on, themes follow the ``xxx-light`` / ``xxx-dark`` naming convention
+    (bootstrap-dark, nord-dark ...), and none of those new dark themes are in
+    ``DARK_THEMES``. Testing against the old set alone would leave ``self._is_dark``
+    False after picking a new dark theme, so the hand-painted widgets (Canvas, list
+    rows, log Text, search entry ...) would stay light and clash with the ttk ones.
     """
     return name in DARK_THEMES or name.endswith("-dark")
 
 # ── Fonts ────────────────────────────────────────────────────────
 #
-# 下面是占位值，真正的族名由 _init_fonts() 在 __init__ 里按平台探测后覆盖
-# （探测要先有 Tk root）。字号不需要按平台区分 —— Tk 9 已把 macOS 的 dpi 基准
-# 从 72 对齐到 96，实测 tk scaling = 1.334，与 Windows 一致。
+# Placeholder values below; the real family names are probed per platform by
+# _init_fonts() in __init__ (probing needs a Tk root). Font sizes need no
+# per-platform split - Tk 9 aligned the macOS dpi baseline from 72 to 96,
+# measured tk scaling = 1.334, the same as Windows.
 
 FONT = ("Microsoft YaHei UI", 10)
 FONT_BOLD = ("Microsoft YaHei UI", 10, "bold")
@@ -158,11 +165,12 @@ FONT_MONO = ("Consolas", 10)
 
 
 def _init_fonts(root):
-    """按平台解析字体族名，覆盖上面那组常量。
+    """Resolve the font family names per platform, overriding the constants above.
 
-    Windows 上探测到 ``Microsoft YaHei UI`` / ``Consolas``，结果与写死时一致；
-    macOS 上换成 ``PingFang SC`` / ``Menlo``。写死会在 macOS 上整片静默回退，
-    中文界面变默认字体、日志区失去等宽对齐，而且不报任何错。
+    On Windows it probes ``Microsoft YaHei UI`` / ``Consolas``, the same result as
+    the hard-coded values; on macOS it picks ``PingFang SC`` / ``Menlo``. Hard-coded
+    names fall back silently on macOS, turning the whole UI into the default font and
+    destroying the log pane's monospace alignment - without raising anything.
     """
     global FONT, FONT_BOLD, FONT_TITLE, FONT_SMALL, FONT_MONO
     ui, mono = resolve_font_families(root)
@@ -172,41 +180,43 @@ def _init_fonts(root):
     FONT_SMALL = (ui, 9)
     FONT_MONO = (mono, 10)
 
-#: 表格列表排序方式（下拉框显示文案跟着语言走，见 ``MainWindow._sort_label``）
+#: Sorting modes for the table list (the dropdown labels follow the language, see ``MainWindow._sort_label``)
 SORT_KEYS = ("name", "time")
-#: 默认按名称排序
+#: Sort by name by default
 DEFAULT_SORT = "name"
 
-#: 数据错误弹窗里最多列几条明细（`messagebox` 不能滚动，列太多会撑到屏幕外）
+#: Max error details listed in the data error dialog (`messagebox` cannot scroll, too many rows overflow the screen)
 _DIALOG_MAX_ERRORS = 10
 
 
 class MainWindow:
     def __init__(self, root, initial_theme="bootstrap-light", initial_language=None):
         self.root = root
-        # 归一化：旧配置里的 1.x 主题名（litera/darkly）换成 2.x 等价名，
-        # 否则主题菜单按 theme_names() 生成，当前主题一项都勾不上。
+                # Normalise: a 1.x theme name (litera/darkly) in an old config becomes its 2.x
+                # equivalent, otherwise the theme menu is built from theme_names() and the
+        # current theme can never be checked.
         self.current_theme = normalize_theme(initial_theme)
         self.projects_data = load_projects()
-        #: 界面语言：优先用调用方给的（main.py 已经读过一次配置），其次配置文件，
-        #: 都没有就是英文。记在 projects.json 顶层，与 sort_by 同级。
+                #: UI language: prefer what the caller passed (main.py already read the config),
+                #: then the config file, then English. Stored at the top level of projects.json,
+        #: next to sort_by.
         self.language = set_language(
             initial_language or self.projects_data.get("language") or DEFAULT_LANGUAGE)
         self.file_paths = []
         self._loading = False
-        #: 触摸板滚动的像素累积器（Windows 用不到，Tk 8.6 也不会写它）
+                #: Pixel accumulator for trackpad scrolling (unused on Windows; Tk 8.6 never writes it)
         self._touchpad_accum = 0.0
-        #: 需要跟着语言切换的控件：``(widget, i18n key)``
+                #: Widgets whose text follows the language: ``(widget, i18n key)``
         self._i18n_widgets = []
-        #: 需要跟着语言切换的菜单项：``(menu, entry index, i18n key)``
+                #: Menu entries whose text follows the language: ``(menu, entry index, i18n key)``
         self._i18n_menu_items = []
-        #: 搜索框占位符文案（随语言变化，过滤时要拿它比对"是不是空")
+                #: Search placeholder text (follows the language; used to tell "is it empty" while filtering)
         self._placeholder = ""
 
-        # 必须在任何 _build_* 之前 —— 那些方法直接引用模块级的 FONT 常量
+                # Must happen before any _build_* - those methods reference the module-level FONT constants
         _init_fonts(root)
 
-        # 兜底：Tk 回调里抛出的异常不再让窗口"无声消失"
+                # Safety net: an exception raised inside a Tk callback no longer makes the window vanish silently
         root.report_callback_exception = self._on_callback_exception
 
         self._is_dark = _is_dark_theme(self.current_theme)
@@ -313,13 +323,15 @@ class MainWindow:
     # ── Menu ─────────────────────────────────────────────────────
 
     def _build_menu(self):
-        """构建菜单栏（只在启动时建一次）。
+        """Build the menu bar (once, at startup).
 
-        ⚠️ 千万别改回"切语言时 destroy 整个菜单栏再重建"：切换语言是从菜单项自己的
-        ``command`` 回调里发起的，而 ``_log()`` 内部会调 ``update_idletasks()``，
-        它能把排队的回调当场拉起来执行 —— 于是销毁菜单栏时菜单仍在使用中
-        （Windows 上就是销毁正在显示的原生菜单），进程会直接闪退。
-        这里把需要跟随语言的项登记进 ``_i18n_menu_items``，切语言只改 label。
+        Never go back to "destroy and rebuild the whole menu bar on a language
+        change": switching is initiated from a menu entry's own ``command`` callback,
+        and ``_log()`` calls ``update_idletasks()``, which can run queued callbacks on
+        the spot - so the menu bar would be destroyed while the menu is still in use
+        (on Windows: destroying the native menu being displayed) and the process dies
+        instantly. Entries that follow the language are registered in
+        ``_i18n_menu_items``; switching only relabels them.
         """
         if getattr(self, "_menubar", None) is not None:
             return
@@ -341,8 +353,8 @@ class MainWindow:
         self._menu_cascade(self._menubar, "menu.theme", self.theme_menu)
         self._rebuild_theme_menu()
 
-        # 语言菜单：夹在「主题」和「帮助」中间。两个选项用各自的母语写法，
-        # 界面是英文时也认得出「中文」。
+                # Language menu: sits between "Theme" and "Help". Both options are written in
+                # their own language so "Chinese" is recognisable even in an English UI.
         self.language_menu = self._submenu()
         self.language_var = tk.StringVar(value=self.language)
         for code, label in LANGUAGES:
@@ -357,35 +369,36 @@ class MainWindow:
         self._menu_cascade(self._menubar, "menu.help", help_menu)
 
     def _menu_item(self, menu, key, command):
-        """在 menu 末尾加一个文案跟随语言的 command 项。"""
+        """Append a command entry to menu whose text follows the language."""
         menu.add_command(label=t(key), command=command)
         self._i18n_menu_items.append((menu, menu.index(tk.END), key))
 
     def _menu_cascade(self, parent, key, menu):
-        """在 parent 末尾加一个文案跟随语言的级联项（挂 menu 子菜单）。"""
+        """Append a cascade entry to parent whose text follows the language (attaching submenu)."""
         parent.add_cascade(label=t(key), menu=menu)
         self._i18n_menu_items.append((parent, parent.index(tk.END), key))
 
 
     def _submenu(self):
-        """建一个与菜单栏同风格的下拉菜单。"""
+        """Create a dropdown menu styled like the menu bar."""
         return tk.Menu(self._menubar, tearoff=0, font=FONT_SMALL, bg=self.CARD, fg=self.TEXT,
                        activebackground=self.ACCENT, activeforeground="white", borderwidth=0)
 
     # ── Language ─────────────────────────────────────────────────
 
     def _reg(self, widget, key):
-        """登记一个跟着语言走的控件，并按当前语言立刻设置文案。
+        """Register a widget whose text follows the language and set the text immediately.
 
-        用法：``self._reg(ttk.Label(frame), "field.source_dir").pack(...)`` ——
-        登记之后 ``_apply_language()`` 能把文字一次性全刷掉，不用到处写 refresh。
+        Usage: ``self._reg(ttk.Label(frame), "field.source_dir").pack(...)`` - once
+        registered, ``_apply_language()`` refreshes every text in one go, so no
+        scattered refresh calls are needed.
         """
         self._i18n_widgets.append((widget, key))
         widget.configure(text=t(key))
         return widget
 
     def _switch_language(self, code):
-        """切换语言：改文案 + 重建菜单 + 落盘。"""
+        """Switch the language: relabel, rebuild menus, persist."""
         self.language = set_language(code)
         self.projects_data["language"] = self.language
         save_projects(self.projects_data)
@@ -393,7 +406,7 @@ class MainWindow:
         self._log(t("log.language_switched", name=dict(LANGUAGES)[self.language]), "info")
 
     def _apply_language(self):
-        """把当前语言应用到所有已登记的控件上（切语言后调用一次即可）。"""
+        """Apply the current language to every registered widget (call once after switching)."""
         self.root.title(t("app.title"))
 
         for widget, key in self._i18n_widgets:
@@ -402,37 +415,40 @@ class MainWindow:
             except tk.TclError:
                 pass
 
-        # 菜单栏：只改需要翻译的那几项 label，不销毁重建（原因见 _build_menu 的说明：
-        # 这个方法会在菜单项自己的回调里被执行，销毁菜单栏 = 销毁正在使用的原生菜单）。
+                # Menu bar: only relabel the entries that need translating, never destroy and rebuild
+                # (see _build_menu: this method can run inside a menu entry's own callback, and
+        # destroying the menu bar destroys the native menu currently in use).
         for menu, index, key in self._i18n_menu_items:
             try:
                 menu.entryconfigure(index, label=t(key))
             except tk.TclError:
                 pass
 
-        # 排序下拉框：值本身是文案，得连选项一起换，再按"键"把选中项对回去
+                # Sort dropdown: the values themselves are translated text, so its options change
+        # along with it and the selected entry is looked up again by key
         if hasattr(self, "sort_combo"):
             sort_key = self._current_sort_key()
             self.sort_combo.configure(values=[self._sort_label(k) for k in SORT_KEYS])
             self.sort_var.set(self._sort_label(sort_key))
 
-        # 搜索框占位符
+                # Search placeholder
         if hasattr(self, "search_entry"):
             self._install_placeholder()
 
-        # 列表里的空状态/计数文案是动态拼的，得重建
+                # The list's empty-state/count text is assembled dynamically, so rebuild it
         self._rebuild_checkbox_list()
 
-        # 状态栏文案：只在"就绪"这类静态状态下才能安全重写
+                # Status bar text: only safe to rewrite in static states such as "Ready"
         if hasattr(self, "progress_label") and self.progress_var.get() == 0:
             self.progress_label.config(text=t("status.ready"))
 
     def _theme_names(self):
-        """菜单要列出的主题名，并保证 ``current_theme`` 一定在其中。
+        """The theme names to list, making sure ``current_theme`` is among them.
 
-        ``theme_names()`` 是库给的可用列表，但配置里可能残留一个它不认识的名字
-        （手工改坏、或更旧的版本写入）。照搬列表的话，当前主题不在选项里，
-        菜单里就一项都勾不上 —— 补进去，至少勾选与实际状态一致。
+        ``theme_names()`` is the library's list of usable themes, but the config may
+        hold a name it does not know (hand-edited, or written by an older version).
+        Listing only the library names would leave the current theme out of the menu
+        with nothing checked - adding it keeps the checkmark consistent with reality.
         """
         names = list(ttk.Style().theme_names())
         if self.current_theme and self.current_theme not in names:
@@ -440,10 +456,11 @@ class MainWindow:
         return names
 
     def _rebuild_theme_menu(self):
-        """按可选主题重建菜单。
+        """Rebuild the menu from the available themes.
 
-        所有单选按钮必须共用**同一个** ``StringVar``：各用各的变量时它们之间
-        毫无关联，Tk 无从判断哪一项该显示勾选标记 —— 菜单里就永远没有一项是勾上的。
+        All radio buttons must share **one** ``StringVar``: with a separate variable
+        each, they are unrelated, Tk cannot tell which entry should show the checkmark,
+        and no entry is ever checked.
         """
         self.theme_menu.delete(0, tk.END)
         if getattr(self, "theme_var", None) is None:
@@ -461,8 +478,9 @@ class MainWindow:
         try:
             ttk.Style().theme_use(name)
             self.current_theme = name
-            # 菜单之外还有别的入口（快捷键、顶部那个明暗切换按钮），
-            # 所以这里显式同步变量，别只依赖点菜单时 Tk 自动改值。
+                        # The theme can also be changed outside this menu (shortcut, the light/dark
+                        # button in the top bar), so sync the variable explicitly instead of relying
+            # on Tk updating it only for menu clicks.
             if getattr(self, "theme_var", None) is not None:
                 self.theme_var.set(name)
             self._is_dark = _is_dark_theme(name)
@@ -475,10 +493,10 @@ class MainWindow:
             messagebox.showerror(t("dlg.error"), t("msg.theme_failed", err=e))
 
     def _toggle_dark_mode(self):
-        """在 2.x 的浅色 / 暗色主题间切换。
+        """Toggle between the 2.x light / dark themes.
 
-        刻意不走 legacy 的 litera / darkly：那两个名字在 2.2 会打
-        DeprecationWarning，且官方计划在 3.0 移除。
+        Deliberately avoids the legacy litera / darkly names: they emit a
+        DeprecationWarning in 2.2 and are scheduled for removal in 3.0.
         """
         target = "bootstrap-dark" if not self._is_dark else "bootstrap-light"
         self._switch_theme(target)
@@ -558,8 +576,9 @@ class MainWindow:
         self._reg(ttk.Button(center_group, bootstyle=PRIMARY,
                              command=self._export_all), "btn.export_all").pack(side=tk.LEFT, padx=2)
 
-        # macOS 上没装 svn 时，这两个按钮点了只会弹错误 —— 直接不显示，连分隔线
-        # 一起省掉。Windows 保持原样（那边靠 TortoiseSVN 或系统 svn，检测方式不同）。
+                # On macOS without svn these two buttons would only pop an error - hide them
+                # completely, separator included. Windows keeps them (it detects svn differently:
+        # TortoiseSVN or the system svn).
         if IS_WIN or find_svn():
             ttk.Separator(bottom, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=6)
 
@@ -592,12 +611,13 @@ class MainWindow:
 
         ttk.Separator(card, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=14, pady=(2, 4))
 
-        # Search bar（搜索框 + 排序方式下拉框）
+                # Search bar (search entry + sort dropdown)
         search_frame = ttk.Frame(card)
         search_frame.pack(fill=tk.X, padx=14, pady=(0, 6))
 
-        # 先 pack 右侧固定宽度的下拉框，搜索框再 fill+expand 剩下的空间 ——
-        # 这样搜索框会自动变窄，把位置让给排序下拉框
+                # Pack the fixed-width dropdown on the right first, then let the search entry
+                # fill and expand into the rest - that way the entry shrinks automatically and
+        # gives the room to the dropdown.
         self.sort_var = tk.StringVar(
             value=self._sort_label(self.projects_data.get("sort_by", DEFAULT_SORT)))
         self.sort_combo = ttk.Combobox(
@@ -637,9 +657,10 @@ class MainWindow:
         self.list_canvas.configure(yscrollcommand=scrollbar.set)
         self.list_canvas.bind("<Configure>", self._on_canvas_resize)
 
-        # 先 pack 滚动条占住右侧固定宽度，再 pack 画布吃掉剩余空间。
-        # 顺序反过来的话，expand=True 的画布会先把横向空间全部占满，
-        # 滚动条被挤成 0 宽而看不见。
+                # Pack the scrollbar first so it claims its fixed width on the right, then pack
+                # the canvas to take the remaining space. In the opposite order the canvas
+                # (expand=True) swallows all the horizontal space first and the scrollbar is
+        # squeezed to zero width and becomes invisible.
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.list_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.list_scrollbar = scrollbar
@@ -900,17 +921,17 @@ class MainWindow:
         self.file_paths = list_excel_files(source_dir)
         self._sort_file_paths()
 
-    # ── 排序 ─────────────────────────────────────────────────────
+        # ── Sorting ────────────────────────────────────────────
 
     @staticmethod
     def _sort_label(key):
-        """排序键 -> 当前语言下的下拉框文案（未知键退回默认的"名称"/"Name"）。"""
+        """Sort key -> dropdown label in the current language (an unknown key falls back to the default)."""
         if key not in SORT_KEYS:
             key = DEFAULT_SORT
         return t("sort.time" if key == "time" else "sort.name")
 
     def _current_sort_key(self):
-        """当前下拉框选中的排序方式（name / time）。"""
+        """The sort mode currently selected in the dropdown (name / time)."""
         label = self.sort_var.get() if hasattr(self, 'sort_var') else ""
         for key in SORT_KEYS:
             if label == self._sort_label(key):
@@ -918,7 +939,7 @@ class MainWindow:
         return DEFAULT_SORT
 
     def _sort_file_paths(self):
-        """按当前排序方式排列：名称 = 升序；时间 = 修改时间新的在前。"""
+        """Order by the current sort mode: name = ascending; time = most recently modified first."""
         try:
             if self._current_sort_key() == "time":
                 self.file_paths.sort(key=lambda p: os.path.getmtime(p), reverse=True)
@@ -928,7 +949,7 @@ class MainWindow:
             pass
 
     def _on_sort_change(self, event=None):
-        """切换排序方式：立即重排列表，并记进配置文件。"""
+        """Switch the sort mode: re-sort the list immediately and persist it to the config."""
         self.projects_data["sort_by"] = self._current_sort_key()
         save_projects(self.projects_data)
         self._sort_file_paths()
@@ -1006,8 +1027,9 @@ class MainWindow:
     def _bind_mousewheel(self, event):
         self.list_canvas.bind_all("<MouseWheel>", self._on_mousewheel)
         if HAS_TOUCHPAD_SCROLL:
-            # Tk 9 起，触摸板 / Magic Mouse / Magic Trackpad 走独立事件，
-            # 不再发 <MouseWheel> —— 不绑这个的话 Mac 上触摸板完全滚不动。
+                        # Since Tk 9, trackpads / Magic Mouse / Magic Trackpad raise their own events
+                        # and no longer send <MouseWheel> - without this binding scrolling simply does
+            # not work on a Mac trackpad.
             self.list_canvas.bind_all("<TouchpadScroll>", self._on_touchpad_scroll)
 
     def _unbind_mousewheel(self, event):
@@ -1016,14 +1038,14 @@ class MainWindow:
             self.list_canvas.unbind_all("<TouchpadScroll>")
 
     def _on_mousewheel(self, event):
-        """鼠标滚轮（量纲换算见 platform_compat.wheel_units）。"""
+        """Mouse wheel (unit conversion lives in platform_compat.wheel_units)."""
         self.list_canvas.yview_scroll(wheel_units(event.delta), "units")
 
     def _on_touchpad_scroll(self, event):
-        """触摸板 / Magic Mouse 的平滑滚动（Tk 9 新增的 <TouchpadScroll>）。
+        """Smooth trackpad / Magic Mouse scrolling (Tk 9's new <TouchpadScroll>).
 
-        每个事件只报几像素，所以先累积、凑够一格再滚 —— 否则一次滑动手势会把
-        列表直接甩到最底。
+        Each event reports only a few pixels, so accumulate them and scroll one step
+        at a time - otherwise a single swipe throws the list straight to the bottom.
         """
         dy = touchpad_dy(event.delta)
         if not dy:
@@ -1063,22 +1085,25 @@ class MainWindow:
         self._do_export(self.file_paths)
 
     def _preflight(self, file_paths):
-        """只读预检：把表全部读进来，并把单元格里的数据错误全找出来。
+        """Read-only pre-flight: load every sheet and find all data errors in the cells.
 
-        受检内容（见 ``core.excel_reader._CHECKED_TYPES``）：
-        - ``table`` / ``any``：手写 Lua 的语法错误（全角括号、JSON 冒号、漏逗号…）
-        - ``number``：填了非数字（``100个`` / ``1,000``），导出后会静默变成 nil
+        Checked content (see ``core.excel_reader._CHECKED_TYPES``):
+        - ``table`` / ``any``: syntax errors in handwritten Lua (full-width brackets,
+          JSON colons, missing commas ...)
+        - ``number``: a non-numeric value (``100pcs`` / ``1,000``) that would silently
+          turn into nil when exported
 
-        这一步**不写任何文件**，所以发现问题时中断是干净的——目标目录不会留下
-        "导了一半"的产物（已存在的旧文件也不会被覆盖）。顺带的好处是每个 xlsx
-        只加载一次，写文件阶段直接用这里的结果。
+        This step **writes no file at all**, so aborting on a problem is clean - the
+        target directory keeps no half-written output (and existing old files are not
+        overwritten either). A pleasant side effect: every xlsx is loaded only once,
+        and the write phase reuses the result.
 
-        返回 ``(loaded, load_fail, error_count, dialog_lines)``：
-        - ``loaded``：``[(file_path, tables)]``，``tables`` 为 ``None`` 表示该文件加载失败
-        - ``load_fail``：加载失败的文件数
-        - ``error_count``：数据错误总数
-        - ``dialog_lines``：给弹窗用的**精简版**错误行（文件/表/单元格/字段 -> 错误），
-          日志里仍写信息最全的那版
+        Returns ``(loaded, load_fail, error_count, dialog_lines)``:
+        - ``loaded``: ``[(file_path, tables)]``, ``tables`` is ``None`` when that file failed to load
+        - ``load_fail``: number of files that failed to load
+        - ``error_count``: total number of data errors
+        - ``dialog_lines``: simplified error lines for the dialog (file/sheet/cell/field -> error),
+          while the log always gets the fullest version
         """
         total = len(file_paths)
         loaded = []
@@ -1094,8 +1119,9 @@ class MainWindow:
                 tables = load_excel(fpath)
                 for info in tables:
                     info["source_path"] = fpath
-                    # 填错的字符（全角括号、JSON 冒号、漏逗号…）在这里就报出来，
-                    # 免得导出的 lua 到游戏里才崩、还得回头找是哪一格。
+                                        # Typos (full-width brackets, JSON colons, missing commas...) are reported
+                                        # right here, so the exported lua does not blow up inside the game and
+                    # force a hunt for the offending cell.
                     for msg in format_syntax_errors(info):
                         self._log(msg, "error")
                         syntax_count += 1
@@ -1113,13 +1139,15 @@ class MainWindow:
         return loaded, load_fail, syntax_count, dialog_lines
 
     def _warn_data_errors(self, count, lines=()):
-        """有数据错误时只作提示，导出直接中断。
+        """Only warn when there are data errors - the export stops right there.
 
-        故意用 ``showwarning``（只有"确定"）而不是 ``askyesno``——**不提供"强行继续导出"**，
-        免得半成品 lua 被写进目标目录、到游戏里才炸。
+        ``showwarning`` (a single "OK") is used on purpose instead of ``askyesno``:
+        there is **no "export anyway" option**, so half-finished lua never reaches the
+        target directory and blows up inside the game.
 
-        弹窗里**直接列出具体错误**（不让人再去日志里翻）：最多列 ``_DIALOG_MAX_ERRORS`` 条，
-        超出的用一行"另有 N 处"带过，日志里是全量。
+        The dialog **lists the actual errors** (no digging through the log needed): up
+        to ``_DIALOG_MAX_ERRORS`` of them, with one extra "and N more" line; the log
+        gets all of them.
         """
         self._log(t("log.data_error_abort", n=count), "error")
 
@@ -1153,7 +1181,7 @@ class MainWindow:
         self._log(t("log.export_start", n=total, client=client_encoding,
                     server=server_encoding), "info")
 
-        # ── 1/2 预检（只读）──────────────────────────────────────
+                # ── 1/2 pre-flight (read only) ─────────────
         loaded, load_fail, syntax_count, error_lines = self._preflight(file_paths)
         if syntax_count:
             self._warn_data_errors(syntax_count, error_lines)
@@ -1161,7 +1189,7 @@ class MainWindow:
             self.progress_label.config(text=t("status.aborted", n=syntax_count))
             return
 
-        # ── 2/2 写文件 ──────────────────────────────────────────
+                # ── 2/2 write files ──────────────────────────
         success_count = 0
         fail_count = load_fail
 
@@ -1196,7 +1224,7 @@ class MainWindow:
     # ── SVN ──────────────────────────────────────────────────────
 
     def _run_tortoise(self, command, clean_path, extra_args=()):
-        """用 TortoiseSVN 自己的窗口执行命令；未检测到 TortoiseSVN 时返回 False。"""
+        """Run the command through TortoiseSVN's own window; returns False when TortoiseSVN is missing."""
         proc = _find_tortoise_proc()
         if not proc:
             return False
@@ -1204,11 +1232,11 @@ class MainWindow:
         return True
 
     def _svn_on_mac(self, command):
-        """macOS 分支：在 Terminal 里执行 svn。返回 True 表示已处理。
+        """macOS branch: run svn in Terminal. Returns True when it handled the call.
 
-        用终端而不是静默的 subprocess，是为了对应 Windows 那边 cmd /k 的行为 ——
-        用户能看见进度和输出。没有 svn 时按钮不会显示（见 _build_bottom_bar），
-        这里的检查只是兜底。
+        A terminal rather than a silent subprocess, mirroring ``cmd /k`` on Windows:
+        the user can see the progress and the output. The buttons are hidden when svn
+        is missing (see _build_bottom_bar); the check here is only a safety net.
         """
         if not IS_MAC:
             return False
@@ -1240,11 +1268,11 @@ class MainWindow:
             messagebox.showerror(t("dlg.error"), t("msg.no_source_dir"))
             return
         clean_path = os.path.normpath(source_dir)
-        # /closeonend:0 = 更新完成后保留窗口，方便查看本次更新了哪些文件
+                    # /closeonend:0 = keep the window open after the update so you can see which files changed
         if self._run_tortoise("update", clean_path, ("/closeonend:0",)):
             self._log(t("log.svn_update_opened", path=clean_path))
             return
-        # 兜底：机器上没装 TortoiseSVN 时退回命令行
+                    # Safety net: fall back to the command line when TortoiseSVN is not installed
         self._log(t("log.svn_no_tortoise"), "error")
         subprocess.Popen(["cmd", "/k", f'cd /d "{clean_path}" && svn update'])
 
@@ -1267,10 +1295,12 @@ class MainWindow:
     # ── Log ──────────────────────────────────────────────────────
 
     def _on_callback_exception(self, exc, val, tb):
-        """Tk 回调里未捕获的异常：写日志 + 落盘 + 弹窗。
+        """Uncaught exception in a Tk callback: log it, write it to disk, show a dialog.
 
-        默认行为是把 traceback 打到 stderr，可打包成 windowed 之后 stderr 是 None，
-        表现就是"点了某处窗口直接消失"，事后查不到任何原因。这里保证一定留下痕迹。
+        The default behaviour prints the traceback to stderr, but once packaged as a
+        windowed app stderr is None - the symptom is "the window just disappeared when
+        I clicked something" with nothing to investigate afterwards. This guarantees a
+        trace is left behind.
         """
         detail = "".join(traceback.format_exception(exc, val, tb))
         summary = "%s: %s" % (exc.__name__, val)
@@ -1305,7 +1335,7 @@ class MainWindow:
         self.root.update_idletasks()
 
     def _clear_log(self):
-        """清空日志区，并把进度条/状态栏复位（否则日志空了、状态栏还留着上次的结论）。"""
+        """Clear the log pane and reset the progress bar / status bar (otherwise the log is empty but the status still shows the previous result)."""
         self.log_text.configure(state=tk.NORMAL)
         self.log_text.delete("1.0", tk.END)
         self.log_text.configure(state=tk.DISABLED)
@@ -1314,10 +1344,11 @@ class MainWindow:
         self.root.update_idletasks()
 
     def _install_placeholder(self):
-        """按当前语言安装搜索框占位符（切语言时会重新调一次）。
+        """Install the search placeholder for the current language (called again on a language change).
 
-        占位符本质是"往输入框里塞了一段灰字"，所以换语言时得先把旧文案认出来替换掉，
-        否则会留下上一种语言的残字；用户真输了内容则不能动。
+        The placeholder is really grey text pushed into the entry, so a language change
+        must first recognise and replace the old text, otherwise leftovers of the
+        previous language stay behind; real user input is left untouched.
         """
         new_placeholder = t("search.placeholder")
         entry, var = self.search_entry, self.search_var

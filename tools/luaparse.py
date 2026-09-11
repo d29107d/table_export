@@ -1,12 +1,13 @@
-"""极简 Lua table 解析器：把导出的 lua 文件解析成 python 嵌套结构，用于顺序无关的结构化对比。"""
+"""Minimal Lua table parser: turns an exported lua file into nested Python structures so that two exports can be compared structurally, ignoring ordering."""
 
 import re
 
-#: 字段名可能是中文 / 符号（导出的 lua 里确实存在 ``地图 = ...`` ``★ = ...``），
-#: 所以 key 不能只按 lua 标识符匹配：取"到 '=' 为止、且不含空白与括号引号"的一段。
+#: Field names may be non-ASCII or symbol-like (the generated lua really does contain
+#: such keys), so a key is not matched as a lua identifier: take the run up to '='
+#: that contains no whitespace, brackets or quotes.
 _KEY_RE = re.compile(r'([^={}\[\]"\'\s]+?)[ \t]*=(?!=)')
 
-#: 长括号的开头：``[[`` / ``[=[`` / ``[==[`` …… ``=`` 层数不限
+#: Opening of a long bracket: ``[[`` / ``[=[`` / ``[==[`` ... with an unlimited number of ``=``
 _LONG_OPEN_RE = re.compile(r'\[(=*)\[')
 
 
@@ -40,11 +41,12 @@ def _skip_ws(text, i):
 
 
 def _long_open_pad(text, i):
-    """``text[i]`` 处若是长括号开头，返回它的 ``=`` 层数（字符串），否则 None。
+    """If ``text[i]`` starts a long bracket, return its ``=`` level (as a string), else None.
 
-    lua 的长括号层数不限：``[[`` / ``[=[`` / ``[==[`` …，收尾必须层数一致。
-    写入端（``core/lua_writer._format_string``）在内容含 ``]`` 时会自动升级层数，
-    所以这里不能只认 ``[[`` 和 ``[=[`` 两级。
+    Lua long brackets have unlimited levels: ``[[`` / ``[=[`` / ``[==[`` ..., and the
+    closing one must use the same level. The writer (``core/lua_writer._format_string``)
+    raises the level automatically when the content contains ``]``, so recognising
+    only ``[[`` and ``[=[`` here would be wrong.
     """
     m = _LONG_OPEN_RE.match(text, i)
     return m.group(1) if m else None
@@ -126,7 +128,7 @@ def _parse_value(text, i):
 
 
 def _try_key(text, i):
-    """判断 i 处是否是 ``key =`` 形式，是则返回 (key, 值起始位置)，否则 (None, i)。"""
+    """Return (key, value start) when position i is a ``key =`` pair, else (None, i)."""
     n = len(text)
     if _long_open_pad(text, i) is not None:
         k, j = _read_long_string(text, i)
@@ -180,7 +182,7 @@ def _parse_block(text, i):
 
 
 class Dup(list):
-    """同一个 key 在字面量里出现多次（运行时后者覆盖前者）；对比时按"多重集"比较。"""
+    """The same key occurs several times in the literal (at runtime the last one wins); compare as a multiset."""
 
     def __eq__(self, other):
         if not isinstance(other, Dup) or len(self) != len(other):

@@ -1,25 +1,28 @@
-"""生成 ``example/`` 下的示例表格与导出产物。
+"""Generate the example workbooks and the exported output under ``example/``.
 
-用法::
+Usage::
 
-    python tools/make_examples.py            # 中英两套都生成（默认）
-    python tools/make_examples.py en         # 只生成英文
-    python tools/make_examples.py zh-CN      # 只生成中文
+    python tools/make_examples.py            # both languages (default)
+    python tools/make_examples.py en         # English only
+    python tools/make_examples.py zh-CN      # Chinese only
 
-产出目录::
+Output layout::
 
     example/
       en/     import/  client/  server/
       zh-CN/  import/  client/  server/
 
-做两件事：
+Two jobs:
 
-1. 在 ``example/<lang>/import/`` 里生成示例 xlsx（覆盖全部表类型与字段类型）
-2. 用本工具的导出逻辑把它们导到 ``example/<lang>/client/`` 与 ``example/<lang>/server/``
+1. write the example xlsx files into ``example/<lang>/import/`` (covering every
+   table layout and field type)
+2. export them with the real export logic into ``example/<lang>/client/`` and
+   ``example/<lang>/server/``
 
-示例表就是"格式说明书"——想知道某一行某一列是干什么的，看这个脚本比看文档准。
-两套语言只有"给人看的文字"不同（表内注释、单元格里的数据、tiny 表头），
-表结构和字段名完全一致，导出的 lua 结构也完全一致。
+The example workbooks *are* the format specification - for "what is this row or
+column for", this script is more accurate than the documentation. The two languages
+differ only in human-facing text (sheet comments, cell data, tiny table headers);
+table structure and field names are identical, and so is the exported lua structure.
 """
 
 import os
@@ -34,33 +37,33 @@ from core.exporter import export_table
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-#: 支持的语言（同时也是 example/ 下的子目录名）
+#: Supported languages (also the subdirectory names under example/)
 LANGS = ("zh-CN", "en")
 
-#: 示例统一用 UTF-8 导出，方便在 GitHub 上直接看。
-#: 实际项目里前后端可以各用各的编码（界面里分别选）。
+#: Examples are always exported as UTF-8 so they can be read directly on GitHub.
+#: A real project may use a different encoding per side (chosen in the UI).
 ENCODING = "utf-8"
 
-#: 生成产物时只清理自己产出的文件，不动目录里的其他东西
+#: Only remove the files this script produced, never anything else in the directory
 _OUTPUT_PREFIX = "cfg_example_"
 
 
 class _Skip:
-    """占位：这一格"根本不存在"（不写入单元格），与空字符串区分开。"""
+    """Placeholder: this cell "does not exist" (nothing is written), as opposed to an empty string."""
 
 
 SKIP = _Skip()
 
 
-# ── 给人看的文字（两套语言只有这里不同）────────────────────────────
+# -- Human-facing text (the only part that differs between the two languages) --
 
-#: 表级元信息那几格的文字（A1/A2/A3 与 D1/D2 的标签）
+#: Text of the table-level metadata cells (labels in A1/A2/A3 and D1/D2)
 _META = {
     "zh-CN": ("导出类型", "导出文件", "key数量", "导出文件头", "导出文件尾"),
     "en": ("Export type", "Export file", "key count", "File header", "File footer"),
 }
 
-#: tiny 表第 5 行的表头
+#: Row 5 header of a tiny table
 _TINY_HEADS = {
     "zh-CN": ("配置备注", "导出参数", "值类型", "字段名", "值"),
     "en": ("Note", "Scope", "Type", "Field", "Value"),
@@ -159,7 +162,7 @@ _CONTENT = {
                 ("功能开关",         "c",  "any",    "enable",           True),
                 ("额外配置",         "sc", "any",    "extra",            "nil"),
                 ("空串开关",         "c",  "any",    "blank_flag",       " "),
-                SKIP,  # 中间留一行空行：tiny 表会跳过空行继续往下读
+                SKIP,  # Leave one blank row in the middle: a tiny table skips blank rows and keeps reading
                 ("活动倍率",         "s",  "number", "activity_rate",    1.5e3),
                 ("公告",             "c",  "string", "notice",           "欢迎光临"),
             ],
@@ -178,8 +181,10 @@ _CONTENT = {
                 ("科学计数",          "s",  "number", "scientific"),
                 ("负数",              "s",  "number", "negative"),
             ],
-            # 第 5/6/7 列刻意排出三种情形：正常值 / 只填了空格（= 空串）/ 整格空着
-            # -> 产物分别是 [[ ]]（空串）、nil、{}，而"整格空着"则是该字段根本不输出
+                        # Columns 4/5/6 deliberately show three cases: a real value / spaces only
+                        # (= empty string) / the cell left empty
+            # -> the output is [[ ]] (empty string), nil and {} respectively, while "cell
+            #    left empty" means the field is not written at all
             "rows": [
                 [1, "第一行\n第二行", "a]]b", "[边界]", "有值", 100, "{{1, 2}}", True, 1.5e3, -42],
                 [2, "单行文本",       "a]b",   "尾]",   " ",    " ",   " ",        False, 2.5e-2, -7],
@@ -330,7 +335,7 @@ _CONTENT = {
 }
 
 
-# ── 写表 ─────────────────────────────────────────────────────────
+# ── Writing sheets ─────────────────────────────────────────────
 
 
 def _set_meta(ws, lang, kind, filename, key_count=0, header="return {", footer="}"):
@@ -350,10 +355,11 @@ def _set_meta(ws, lang, kind, filename, key_count=0, header="return {", footer="
 
 def write_base_sheet(wb, lang, title, filename, key_count, columns, rows,
                      header="return {", footer="}"):
-    """写一张 base 表（一行一条数据）。
+    """Write one base sheet (one row per record).
 
-    ``columns``: ``(注释, scope, 类型, 字段名)`` 列表
-    ``rows``: 每行一个列表，元素顺序与 ``columns`` 一致；用 ``SKIP`` 表示空着这一格
+    ``columns``: list of ``(comment, scope, type, field name)``
+    ``rows``: one list per row, ordered like ``columns``; use ``SKIP`` to leave a
+    cell empty
     """
     ws = wb.create_sheet(title)
     _set_meta(ws, lang, "base", filename, key_count, header, footer)
@@ -373,9 +379,10 @@ def write_base_sheet(wb, lang, title, filename, key_count, columns, rows,
 
 
 def write_tiny_sheet(wb, lang, title, filename, fields, header="return {", footer="}"):
-    """写一张 tiny 表（一行一个字段，整个文件就一条记录）。
+    """Write one tiny sheet (one field per row; the whole file is a single record).
 
-    ``fields``: ``(注释, scope, 类型, 字段名, 值)`` 列表；用 ``SKIP`` 表示整行留空。
+    ``fields``: list of ``(comment, scope, type, field name, value)``; use ``SKIP``
+    to leave the whole row empty.
     """
     ws = wb.create_sheet(title)
     _set_meta(ws, lang, "tiny", filename, 0, header, footer)
@@ -403,7 +410,7 @@ def _new_workbook():
     return wb
 
 
-# ── 各示例文件 ───────────────────────────────────────────────────
+# ── Example files ───────────────────────────────────────────
 
 
 def build_types_and_scopes(lang, import_dir):
@@ -428,15 +435,15 @@ def build_keys_and_layout(lang, import_dir):
     c = _CONTENT[lang]
     wb = _new_workbook()
 
-    shop = c["shop"]  # key 数量 2 -> [shop_id] = { [item_id] = { ... } }
+    shop = c["shop"]              # key count 2 -> [shop_id] = { [item_id] = { ... } }
     write_base_sheet(wb, lang, shop["sheet"], "cfg_example_shop.lua", 2,
                      shop["cols"], shop["rows"])
 
-    tips = c["tips"]  # key 数量 0 -> 每条数据一个匿名 table 元素
+    tips = c["tips"]              # key count 0 -> one anonymous table element per row
     write_base_sheet(wb, lang, tips["sheet"], "cfg_example_tips.lua", 0,
                      tips["cols"], tips["rows"])
 
-    # 会被跳过的两种页（都**不会**产生 lua 文件）
+        # The two sheet kinds that get skipped (neither produces a lua file)
     readme = c["readme"]
     ws = wb.create_sheet(readme["sheet"])
     ws["A1"], ws["B1"], ws["A3"] = readme["lines"]
@@ -468,7 +475,7 @@ def build_edge_cases(lang, import_dir):
     write_base_sheet(wb, lang, edge["sheet"], "cfg_example_edge.lua", 1,
                      edge["cols"], edge["rows"])
 
-    # 文件头/尾可以自定义：这里包一层 local + return，产物依然是合法 lua
+        # The file header/footer can be customised: this wraps everything in local + return, still valid lua
     custom = c["custom"]
     write_base_sheet(wb, lang, custom["sheet"], "cfg_example_custom.lua", 1,
                      custom["cols"], custom["rows"],
@@ -486,7 +493,7 @@ def build_all(lang, import_dir):
     build_edge_cases(lang, import_dir)
 
 
-# ── 导出 ─────────────────────────────────────────────────────────
+# ── Export ─────────────────────────────────────────────────────
 
 
 def lang_dirs(lang):

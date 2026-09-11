@@ -1,25 +1,30 @@
-"""Lua 数据字面量 & 数字格式校验（给导表用）。
+"""Lua literal and number format validation (used while exporting).
 
-目的：配置表里 ``type`` 是 ``table`` / ``any`` 的单元格要手写 Lua（``{...}``），
-填错一个全角括号、漏个逗号、把 JSON 的 ``:`` 当成 ``=`` 用，导出来的 lua 就会
-加载失败、而且报错位置离现场很远；``type`` 是 ``number`` 的单元格填了非数字
-（``100个`` / ``1,000``）则会被**静默写成 nil**，数据悄悄丢掉。这里在导出时先校验一遍，
-把问题直接写进日志。
+Goal: cells whose ``type`` is ``table`` / ``any`` hold handwritten Lua (``{...}``).
+One full-width bracket, one missing comma, or a JSON ``:`` used as ``=`` makes the
+exported lua fail to load, and the reported position is far away from the actual
+cell. A cell whose ``type`` is ``number`` but holds something non-numeric
+(``100pcs`` / ``1,000``) is **silently written as nil**, losing data without a
+trace. This module validates during the export and writes the findings into the log.
 
-覆盖范围（只做"表达式/字面量"这一层，不做完整 Lua 语法）：
+Coverage (expressions/literals only, not the full Lua grammar):
 
-- 字面量：number（十进制 / 十六进制 / 科学计数）、string（短串 / 长串 ``[[..]]``）、
-  ``nil`` / ``true`` / ``false``
-- 表格构造式 ``{...}``：``[k]=v``、``name=v``、位置值三种写法混用
-- 运算符：``+ - * / % ^ .. == ~= < > <= >= and or not #``（含优先级与结合性）
-- 前缀表达式：``a.b`` / ``a[b]`` / ``f(x)`` / ``f{...}`` / ``f"x"`` / ``obj:m(x)``
+- literals: number (decimal / hexadecimal / scientific), string (short / long
+  ``[[..]]``), ``nil`` / ``true`` / ``false``
+- table constructors ``{...}``: ``[k]=v``, ``name=v`` and positional values mixed
+- operators: ``+ - * / % ^ .. == ~= < > <= >= and or not #`` (with precedence and
+  associativity)
+- prefix expressions: ``a.b`` / ``a[b]`` / ``f(x)`` / ``f{...}`` / ``f"x"`` / ``obj:m(x)``
 
-另外 ``validate_number()`` 校验 ``number`` 列能否转成 lua 数字，判定复用导出用的
-``lua_writer.to_number_literal``（同一套规则，不会自相矛盾）。
+``validate_number()`` additionally checks whether a ``number`` column converts to a
+lua number, reusing the exporter's ``lua_writer.to_number_literal`` so the two can
+never contradict each other.
 
-刻意宽松的地方：**转义序列一律接受**（``\\%``、``\\墓`` 这类引擎自定义转义不能判错），
-短字符串里出现裸换行也不报错。``function`` 定义不支持（配置里不会出现，
-全量源表 75476 个单元格零命中），遇到会明确报出来而不是静默通过。
+Deliberately lenient: **every escape sequence is accepted** (engine-specific
+escapes such as ``\\%`` must not be flagged as errors) and a raw newline inside a
+short string is not reported either. ``function`` definitions are not supported
+(they do not appear in configuration tables - zero hits across 75476 cells); when
+one shows up it is reported explicitly instead of passing silently.
 """
 
 import re
@@ -27,7 +32,7 @@ import re
 from .i18n import t
 from .lua_writer import to_number_literal
 
-#: Lua 关键字
+#: Lua keywords
 _KEYWORDS = frozenset((
     'and', 'break', 'do', 'else', 'elseif', 'end', 'false', 'for', 'function',
     'if', 'in', 'local', 'nil', 'not', 'or', 'repeat', 'return', 'then',
@@ -38,31 +43,31 @@ _NAME_RE = re.compile(r'[A-Za-z_][A-Za-z0-9_]*')
 _NUMBER_RE = re.compile(r'0[xX][0-9a-fA-F]+|(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?')
 _LONG_OPEN_RE = re.compile(r'\[(=*)\[')
 
-#: 多字符符号要排在单字符前面
+#: Multi-character symbols must come before single-character ones
 _SYMBOLS = (
     '...', '..', '==', '~=', '<=', '>=',
     '+', '-', '*', '/', '%', '^', '#', '<', '>', '=',
     '(', ')', '{', '}', '[', ']', ';', ':', ',', '.',
 )
 
-#: 二元运算符优先级 ``op -> (left, right)``，取自 Lua 5.1 ``lparser.c`` 的 priority 表
+#: Binary operator priorities ``op -> (left, right)``, from the priority table in Lua 5.1 ``lparser.c``
 _BINARY_PREC = {
     'or': (1, 1),
     'and': (2, 2),
     '<': (3, 3), '>': (3, 3), '<=': (3, 3), '>=': (3, 3),
     '~=': (3, 3), '==': (3, 3),
-    '..': (5, 4),                         # 右结合
+    '..': (5, 4),                         # right associative
     '+': (6, 6), '-': (6, 6),
     '*': (7, 7), '/': (7, 7), '%': (7, 7),
-    '^': (10, 9),                         # 右结合
+    '^': (10, 9),                         # right associative
 }
 
-#: 一元运算符优先级（Lua 的 ``UNARY_PRIORITY``）
+#: Unary operator priority (Lua's ``UNARY_PRIORITY``)
 _UNARY_PRIORITY = 8
 
 
 class LuaSyntaxError(Exception):
-    """语法错误；``pos`` 是出错的字符下标（从 0 开始）。"""
+    """Syntax error; ``pos`` is the index of the offending character (0-based)."""
 
     def __init__(self, message, pos=None):
         super().__init__(message)
@@ -70,12 +75,13 @@ class LuaSyntaxError(Exception):
         self.pos = pos
 
 
-# ── 词法 ─────────────────────────────────────────────────────────
+# ── Lexer ──────────────────────────────────────────────────────
 
 def _scan_short_string(text, start):
-    """扫描 ``"..."`` / ``'...'``，返回 (结束下标, 是否正常闭合)。
+    """Scan ``"..."`` / ``'...'``, returning (end index, properly closed).
 
-    转义序列宽松处理：``\\`` 后面无论是谁都跳过两个字符（引擎自定义转义很常见）。
+    Escape sequences are lenient: whatever follows a ``\\`` is skipped as a pair
+    (engine-specific escapes are very common).
     """
     quote = text[start]
     i = start + 1
@@ -92,7 +98,7 @@ def _scan_short_string(text, start):
 
 
 def _tokenize(text):
-    """切成 ``(kind, value, pos)`` 列表，末尾必有 ``('eof', '', len)``。"""
+    """Split into a list of ``(kind, value, pos)``; always ends with ``('eof', '', len)``."""
     tokens = []
     i, n = 0, len(text)
     while i < n:
@@ -102,7 +108,7 @@ def _tokenize(text):
             i += 1
             continue
 
-        # 注释
+        # comment
         if text.startswith('--', i):
             m = _LONG_OPEN_RE.match(text, i + 2)
             if m:
@@ -116,7 +122,7 @@ def _tokenize(text):
                 i = n if j < 0 else j + 1
             continue
 
-        # 长字符串 [[...]] / [=[...]=]
+        # long string [[...]] / [=[...]=]
         m = _LONG_OPEN_RE.match(text, i)
         if m:
             close = ']' + m.group(1) + ']'
@@ -128,7 +134,7 @@ def _tokenize(text):
             i = end
             continue
 
-        # 短字符串
+        # short string
         if ch in '"\'':
             end, ok = _scan_short_string(text, i)
             if not ok:
@@ -137,7 +143,7 @@ def _tokenize(text):
             i = end
             continue
 
-        # 数字（.5 也算，但单独的 . 不算）
+        # number (.5 counts, a lone . does not)
         if ch.isdigit() or (ch == '.' and i + 1 < n and text[i + 1].isdigit()):
             m = _NUMBER_RE.match(text, i)
             if m:
@@ -146,7 +152,7 @@ def _tokenize(text):
                 continue
             raise LuaSyntaxError(t("syn.bad_number"), i)
 
-        # 名字 / 关键字
+        # name / keyword
         m = _NAME_RE.match(text, i)
         if m:
             word = m.group(0)
@@ -154,7 +160,7 @@ def _tokenize(text):
             i = m.end()
             continue
 
-        # 符号
+        # symbol
         for sym in _SYMBOLS:
             if text.startswith(sym, i):
                 tokens.append(('symbol', sym, i))
@@ -168,9 +174,10 @@ def _tokenize(text):
 
 
 def _char_desc(ch):
-    """把字符描述成人话（全角字符点出来，这几乎是填表最常见的手误）。
+    """Describe a character in plain words (naming full-width characters, by far the most common typo).
 
-    文案走 ``i18n``：这些提示要跟着界面语言走，英文用户同样看得懂。
+    The text goes through ``i18n`` so the hints follow the UI language and English
+    users understand them too.
     """
     if ch == '（':
         return t("char.fullwidth_lparen")
@@ -206,14 +213,14 @@ def _describe(token):
     return repr(value)
 
 
-# ── 语法 ─────────────────────────────────────────────────────────
+# ── Parser ─────────────────────────────────────────────────────
 
 class _Parser:
     def __init__(self, tokens):
         self.toks = tokens
         self.i = 0
 
-    # -- 基础操作 --
+    # -- basic operations --
 
     def peek(self, k=0):
         j = self.i + k
@@ -236,7 +243,7 @@ class _Parser:
                 t("syn.expect_symbol", sym=sym, found=_describe(tok)), tok[2])
         return self.advance()
 
-    # -- 表达式（优先级爬升，与 Lua 官方解析器一致）--
+    # -- expressions (precedence climbing, same as the official Lua parser) --
 
     def parse(self):
         self.expression(0)
@@ -301,7 +308,7 @@ class _Parser:
             t("syn.expect_value", found=_describe(tok)), pos)
 
     def _table_body(self):
-        """``{`` 已消费。"""
+        """``{`` has already been consumed."""
         if self.at_symbol('}'):
             self.advance()
             return
@@ -379,10 +386,10 @@ class _Parser:
             t("syn.expect_args", found=_describe(tok)), tok[2])
 
 
-# ── 对外接口 ─────────────────────────────────────────────────────
+# ── Public interface ─────────────────────────────────────────
 
 def validate_lua_value(text):
-    """校验一段 Lua 表达式/字面量。通过返回 ``None``，否则返回错误描述字符串。"""
+    """Validate a Lua expression/literal. Returns ``None`` on success, else the error description."""
     try:
         _Parser(_tokenize(text)).parse()
     except LuaSyntaxError as e:
@@ -393,35 +400,38 @@ def validate_lua_value(text):
     return None
 
 
-#: ``number`` 列转出来的字面量应当长这样（十进制 / 小数 / 科学计数，可带负号）。
-#: 用来兜住 ``to_number_literal`` 可能放过的 Python 怪东西（``nan`` / ``inf``）。
+#: A literal produced from a ``number`` column should look like this (decimal / fraction / scientific, optional sign).
+#: It catches the odd Python values ``to_number_literal`` may let through (``nan`` / ``inf``).
 _NUM_LITERAL_RE = re.compile(r'^-?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?$')
 
-#: 弹窗（``compact=True``）里单条错误描述的字符上限，超了截断加省略号。
-#: ``messagebox`` 不能滚动、只按约 3 英寸（≈288px）折行，行太长会把窗口撑得很高；
-#: 48 字符够放下"全角逗号，应该用半角 ','"这类关键提示，只裁剪异常冗长的报错。
+#: Max characters for a single error description in the dialog (``compact=True``); longer ones are truncated.
+#: ``messagebox`` cannot scroll and wraps at about 3 inches (~288px), so long lines make the window very tall;
+#: 48 characters is enough for hints such as "use the half-width ',' instead" and only trims the verbose ones.
 _DIALOG_ERR_WIDTH = 48
 
 
 def validate_number(value):
-    """校验 ``number`` 类型的单元格能不能导出成 lua 数字。
+    """Check whether a ``number`` cell can be exported as a lua number.
 
-    判定直接复用导出用的 ``to_number_literal``，所以**不会出现"校验通过、导出却是 nil"**：
-    转得出来就放行，转不出来（会被静默写成 ``nil``，等于数据丢了）就报错。
-    典型该报的填法：``100个`` / ``1,000`` / ``1.2.3`` / 全角 ``１２３`` / ``暂无``。
+    The decision reuses the exporter's ``to_number_literal``, so "validation passed
+    but the export wrote nil" can never happen: a convertible value is accepted,
+    an unconvertible one (which would silently become ``nil``, i.e. data loss) is
+    reported. Typical offenders: digits with a trailing unit (``100pcs``),
+    thousands separators (``1,000``), several dots (``1.2.3``), full-width digits,
+    or placeholder words such as "n/a".
     """
     if value is None:
         return None
     if isinstance(value, bool):
-        return None                       # Excel 里的 TRUE/FALSE，lua 里合法
+        return None                       # Excel TRUE/FALSE, valid in lua
     text = str(value).strip()
     if not text:
-        return None                       # 空值导出成 nil，是既有约定，放行
+        return None                       # An empty value exports as nil - an existing convention, so let it through
     try:
         literal = to_number_literal(value)
     except (ValueError, OverflowError, TypeError):
         return t("num.not_a_number")
-    # to_number_literal 对"填了 true/false 文本"的布尔值返回 'true'/'false'，那是合法的
+    # to_number_literal returns 'true'/'false' for a boolean written as text - that is valid
     if literal in ('true', 'false'):
         return None
     if literal is None:
@@ -432,7 +442,7 @@ def validate_number(value):
 
 
 def column_letter(col):
-    """1 起算的列号 -> Excel 列名（1 → ``A``，28 → ``AB``，702 → ``AAA``）。"""
+    """1-based column number -> Excel column name (1 -> ``A``, 28 -> ``AB``, 702 -> ``AAA``)."""
     letters = ''
     n = int(col)
     while n > 0:
@@ -442,10 +452,10 @@ def column_letter(col):
 
 
 def cell_ref(row, col):
-    """把行号/列号拼成 Excel 里看到的单元格地址，如 ``B12``。
+    """Build the cell address as seen in Excel from the row/column numbers, e.g. ``B12``.
 
-    行或列缺失时返回 ``None``（老数据没有 ``col`` 字段时不至于报错，
-    日志里退化成只写行号）。
+    Returns ``None`` when the row or column is missing (older data without a ``col``
+    field must not raise, it just degrades to a bare row number in the log).
     """
     if row is None or col is None:
         return None
@@ -456,17 +466,20 @@ def cell_ref(row, col):
 
 
 def format_syntax_errors(table_info, compact=False):
-    """把 ``table_info['syntax_errors']`` 渲染成一行行文本。
+    """Render ``table_info['syntax_errors']`` as lines of text.
 
-    默认（``compact=False``）给**日志**用，信息最全，带单元格地址（``B12``）与行列号、
-    字段名、错误描述和单元格内容预览：
+    By default (``compact=False``) the output is for the **log** and carries the
+    most information: cell address (``B12``) plus row/column numbers, field name,
+    error description and a preview of the cell content:
 
-    ``Lua 语法错误: 某表.xlsx / 某页 / 单元格 B12（第 12 行 B 列） / 字段 items -> … ｜ 内容: …``
+    ``Lua syntax error: book.xlsx / sheet / cell B12 (row 12, column B) / field items -> ... | content: ...``
 
-    ``compact=True`` 给**弹窗**用：去掉错误分类前缀和单元格内容预览，错误描述截断到
-    ``_DIALOG_ERR_WIDTH``，控制单行宽度（``messagebox`` 不能滚动，行太长/太多会把窗口撑高）：
+    ``compact=True`` is for the **dialog**: it drops the category prefix and the
+    content preview and truncates the description to ``_DIALOG_ERR_WIDTH``, keeping
+    every line short (``messagebox`` cannot scroll, so long or numerous lines make
+    the window very tall):
 
-    ``某表.xlsx / 某页 / 单元格 B12（第 12 行 B 列） / items -> 出现了 Lua 里不合法的字符 '，'…``
+    ``book.xlsx / sheet / cell B12 (row 12, column B) / items -> contains a character that is not valid in Lua ...``
     """
     errors = table_info.get('syntax_errors') or []
     if not errors:
@@ -478,7 +491,7 @@ def format_syntax_errors(table_info, compact=False):
         row, col = e.get('row'), e.get('col')
         ref = cell_ref(row, col)
 
-        # 单元格地址 + 行列号，两种档位都带（用户明确要求弹窗里也要有"第 X 行 Y 列"）
+        # Cell address plus row/column numbers, included in both formats (the dialog must show them too, as requested)
         if ref:
             where = t("err.where_cell", ref=ref, row=row, col=column_letter(col))
         elif row is not None:

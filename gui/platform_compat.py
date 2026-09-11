@@ -1,11 +1,12 @@
-"""平台适配层。
+"""Platform adaptation layer.
 
-本项目原本只在 Windows 上跑，Windows 专有的东西（雅黑字体、TortoiseSVN、
-``cmd /k``、conda 的 dll、exe 同级的 config 目录）散落在各处。这里集中收口，
-上层只问"该用什么"，不自己判断平台。
+The project used to run on Windows only, and Windows-specific things (the YaHei
+font, TortoiseSVN, ``cmd /k``, conda's DLLs, the ``config`` directory next to the
+exe) were scattered all over the code base. They are collected here; upper layers
+only ask "what should I use" instead of testing the platform themselves.
 
-设计原则：**Windows 行为逐字不变** —— 每个分支在 Windows 上走到的都是原来的
-那条路，新增的只是 macOS 那一侧。
+Design rule: **Windows behaviour is unchanged, character for character** - every
+branch still takes the old path on Windows, and only the macOS side is new.
 """
 
 import os
@@ -19,25 +20,25 @@ from tkinter import font as tkfont
 IS_MAC = sys.platform == 'darwin'
 IS_WIN = sys.platform.startswith('win')
 
-#: Tk 9 起给触摸板 / 精密设备单开了 ``<TouchpadScroll>`` 事件，它们不再发 ``<MouseWheel>``
+#: Since Tk 9, trackpads / precision devices raise their own ``<TouchpadScroll>`` event and no longer send ``<MouseWheel>``
 HAS_TOUCHPAD_SCROLL = tk.TkVersion >= 8.7
 
-#: 应用名，用于 macOS 的配置目录
+#: Application name, used for the macOS config directory
 APP_NAME = 'table_exporter'
 
 _PROJECT_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 
 
-# ── 字体 ─────────────────────────────────────────────────────────────
+# ── Fonts ──────────────────────────────────────────────────────────
 
-#: 界面字体候选，按优先级。Windows 用雅黑，macOS 用苹方；
-#: 后面几个是兜底，防止在精简过的系统上整片回退到默认字体。
+#: UI font candidates in priority order. YaHei on Windows, PingFang on macOS;
+#: the rest are fallbacks so a stripped-down system does not fall back to the default font everywhere.
 _UI_FAMILIES = {
     'win32': ('Microsoft YaHei UI', 'Microsoft YaHei', 'Segoe UI', 'Arial'),
     'darwin': ('PingFang SC', 'Hiragino Sans GB', 'Helvetica Neue', 'Helvetica'),
 }
 
-#: 等宽字体候选（日志区、错误明细用）
+#: Monospace font candidates (log pane, error details)
 _MONO_FAMILIES = {
     'win32': ('Consolas', 'Courier New'),
     'darwin': ('Menlo', 'Monaco', 'Courier New'),
@@ -45,13 +46,16 @@ _MONO_FAMILIES = {
 
 
 def resolve_font_families(root=None):
-    """挑出本机真实存在的 (界面字体族, 等宽字体族)。
+    """Pick the (UI font family, monospace family) that really exist on this machine.
 
-    Tk 对不存在的字体**不报错，只静默回退**。原来写死的 ``Microsoft YaHei UI``
-    和 ``Consolas`` 在 macOS 上都没有，中文界面会整片变成默认字体、日志区的
-    等宽对齐也会失效 —— 而且不报任何错，很难发现。所以改成运行期探测。
+    Tk does **not** raise for a missing font, it silently falls back. The hard-coded
+    ``Microsoft YaHei UI`` and ``Consolas`` do not exist on macOS, so the whole
+    Chinese UI turned into the default font and the log pane lost its monospace
+    alignment - without any error, which makes it very hard to notice. Hence the
+    runtime probe.
 
-    Windows 上 ``Microsoft YaHei UI`` 存在，返回值与写死时完全一致。
+    On Windows ``Microsoft YaHei UI`` exists, so the result is identical to the
+    hard-coded values.
     """
     key = 'darwin' if IS_MAC else 'win32'
 
@@ -64,8 +68,9 @@ def resolve_font_families(root=None):
         for name in candidates:
             if name.lower() in available:
                 return name
-        # 候选一个都没有时，退回 Tk 自己的默认字体族（同样是真实存在的族名，
-        # 比继续拿一个不存在的名字去赌回退行为要踏实）
+                # When none of the candidates exists, fall back to Tk's own default family (a
+                # real family name, which beats gambling on the fallback behaviour of a name
+        # that does not exist)
         try:
             return tkfont.nametofont(fallback_font, root).actual('family')
         except Exception:
@@ -75,17 +80,19 @@ def resolve_font_families(root=None):
             pick(_MONO_FAMILIES[key], 'TkFixedFont'))
 
 
-# ── 配置目录 ─────────────────────────────────────────────────────────
+# ── Config directory ─────────────────────────────────────────────
 
 def config_dir():
-    """运行期配置目录（projects.json / theme.json 放这儿）。
+    """Runtime config directory (holds projects.json / theme.json).
 
-    Windows：沿用 exe（或源码根）同级的 ``config/`` —— 绿色版习惯，原样不动。
+    Windows: keeps the ``config/`` next to the exe (or the source root) - the
+    portable-app convention, unchanged.
 
-    macOS：不能再用 exe 同级目录。打成 ``.app`` 后那是
-    ``Xxx.app/Contents/MacOS/config`` —— PyInstaller 会自动给 .app 做 ad-hoc
-    签名，往里写文件会让签名失效；而且用户换新版本时整个目录会被替换，配置
-    跟着丢。所以放到 ``~/Library/Application Support/`` 下。
+    macOS: the directory next to the exe can no longer be used. Inside a ``.app``
+    that is ``Xxx.app/Contents/MacOS/config`` - PyInstaller ad-hoc signs the bundle,
+    and writing there invalidates the signature; on top of that the whole directory
+    is replaced when the user installs a new version, losing the settings along with
+    it. So it moves to ``~/Library/Application Support/``.
     """
     if IS_MAC:
         return os.path.join(os.path.expanduser('~'), 'Library',
@@ -96,7 +103,7 @@ def config_dir():
 
 
 def bundled_config_dir():
-    """打包进包里的兜底 config（首次启动时当模板用，之后用 config_dir()）。"""
+    """Fallback config bundled into the package (used as a template on first launch, then config_dir())."""
     if getattr(sys, 'frozen', False):
         return os.path.join(getattr(sys, '_MEIPASS', _PROJECT_ROOT), 'config')
     return os.path.join(_PROJECT_ROOT, 'config')
@@ -104,20 +111,21 @@ def bundled_config_dir():
 
 # ── SVN ──────────────────────────────────────────────────────────────
 
-#: svn 的常见安装位置。
-#: **不能只靠 shutil.which**：从 Finder / Dock 启动的 GUI 应用继承的是 launchd
-#: 的精简 PATH（``/usr/bin:/bin:/usr/sbin:/sbin``），Homebrew 的
-#: ``/opt/homebrew/bin`` 不在里面 —— 终端里敲 svn 没问题，程序里却找不到。
+#: Common svn install locations.
+#: **shutil.which alone is not enough**: a GUI app launched from Finder / Dock
+#: inherits launchd's minimal PATH (``/usr/bin:/bin:/usr/sbin:/sbin``), which does
+#: not include Homebrew's ``/opt/homebrew/bin`` - svn works in a terminal, yet the
+#: app cannot find it.
 _SVN_CANDIDATES = (
     '/opt/homebrew/bin/svn',   # Homebrew (Apple Silicon)
-    '/usr/local/bin/svn',      # Homebrew (Intel) / 手工编译
+    '/usr/local/bin/svn',      # Homebrew (Intel) / built by hand
     '/opt/local/bin/svn',      # MacPorts
-    '/usr/bin/svn',            # Xcode 26 之前自带（现已移除）
+    '/usr/bin/svn',            # Bundled with Xcode before 26 (now removed)
 )
 
 
 def find_svn():
-    """定位 svn 可执行文件；找不到返回 None。仅 macOS 用。"""
+    """Locate the svn executable; returns None when it is not found. macOS only."""
     exe = shutil.which('svn')
     if exe:
         return exe
@@ -128,16 +136,17 @@ def find_svn():
 
 
 def run_svn_in_terminal(svn_exe, command, path):
-    """在 Terminal.app 里跑 ``svn <command>``。
+    """Run ``svn <command>`` inside Terminal.app.
 
-    对应 Windows 那边的 ``cmd /k``：让用户看得见进度和输出，而不是一个没有
-    反馈的等待。首次调用 macOS 会弹「允许 Terminal 控制」的授权，同意后不再问。
+    The counterpart of ``cmd /k`` on Windows: the user can see the progress and the
+    output instead of waiting with no feedback. The first call makes macOS ask for
+    permission to control Terminal; afterwards it stops asking.
 
-    :param command: ``update`` / ``commit`` / ``status`` 等
-    :param path: 工作副本目录
+    :param command: ``update`` / ``commit`` / ``status`` etc.
+    :param path: working copy directory
     """
     shell_cmd = f'cd {shlex.quote(path)} && {shlex.quote(svn_exe)} {command}'
-    # AppleScript 的字符串只能用双引号，所以这里要转义反斜杠和双引号
+        # AppleScript strings accept double quotes only, so backslashes and double quotes need escaping
     escaped = shell_cmd.replace('\\', '\\\\').replace('"', '\\"')
     script = ('tell application "Terminal"\n'
               '    activate\n'
@@ -146,41 +155,41 @@ def run_svn_in_terminal(svn_exe, command, path):
     subprocess.Popen(['osascript', '-e', script])
 
 
-# ── 滚轮 ─────────────────────────────────────────────────────────────
+# ── Mouse wheel ────────────────────────────────────────────────────
 
-#: 触摸板事件每个只报几像素，累积到这个阈值才滚一格
+#: A trackpad event reports only a few pixels; accumulate up to this threshold before scrolling one step
 TOUCHPAD_STEP = 40
 
 
 def wheel_units(delta):
-    """把 ``<MouseWheel>`` 的 delta 换算成滚动单位数。
+    """Convert a ``<MouseWheel>`` delta into a number of scroll units.
 
-    Tk 9 起各平台（含 macOS）都归一化成 ±120 的倍数；Tk 8.6 的 macOS 则是
-    每个刻度报 1。用阈值判断，两种量纲都能得到"一格 = 1 单位"。
+    Since Tk 9 every platform (macOS included) normalises it to a multiple of +/-120;
+    Tk 8.6 on macOS reports 1 per notch. A magnitude threshold gives "one notch = 1
+    unit" for both scales.
 
-    **Windows + Tk 8.6 的小 delta 必须原样保留为 0**：那种 delta 来自精密触控板
-    （Windows 把两指滚动报成 <MouseWheel>，delta 不是 120 的倍数），旧代码
-    ``int(-delta/120)`` 会得到 0。若在这里返回 -delta，会被当成"格"而一下滚十几个
-    单位，列表会失控。
-
-    注意本项目的 Canvas 没设 ``yscrollincrement``，所以一个 unit 就是画布
-    高度的 1/10。
+    **A small delta on Windows + Tk 8.6 must stay 0**: such a delta comes from a
+    precision touchpad (Windows reports two-finger scrolling as <MouseWheel> with a
+    delta that is not a multiple of 120) and the old ``int(-delta/120)`` yielded 0.
+    Returning -delta here would be treated as that many single steps and fling the
+    list around. Note that this project's Canvas has no ``yscrollincrement``, so one
+    unit is a tenth of the canvas height.
     """
     if abs(delta) >= 120:
         return -int(delta / 120)
     if IS_MAC:
-        # Tk 8.6 aqua：一个刻度报 ±1（Tk 9 已归一化，走上面那条）
+                # Tk 8.6 aqua: one notch reports +/-1 (Tk 9 normalises it and takes the branch above)
         return -int(delta)
-    # Windows Tk 8.6：小 delta 来自精密触控板，维持旧行为，
-    # 否则会把像素位移当成"格"而疯狂滚动
+        # Windows Tk 8.6: a small delta comes from a precision touchpad - keep the old
+        # behaviour, otherwise a pixel shift would be treated as a "step" and scroll wildly
     return 0
 
 
 def touchpad_dy(delta):
-    """从 ``<TouchpadScroll>`` 的打包 delta 里取出垂直位移。
+    """Extract the vertical displacement from a packed ``<TouchpadScroll>`` delta.
 
-    Tk 把两个轴的像素位移打包进一个整数：高 16 位是 dx、低 16 位是 dy，
-    各按有符号 16 位解释。
+    Tk packs both axes into one integer: the high 16 bits are dx and the low 16 bits
+    are dy, each interpreted as a signed 16-bit value.
     """
     dy = delta & 0xFFFF
     if dy >= 0x8000:

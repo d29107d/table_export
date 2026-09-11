@@ -1,32 +1,36 @@
-"""界面与提示文案的中英文切换。
+"""Chinese/English switching for UI text and messages.
 
-放在 ``core`` 里是因为两边都要用：``gui`` 的界面文案，以及 ``core.lua_syntax``
-的校验报错。这个模块**不依赖 Tk**，纯逻辑脚本里也能直接用。
+It lives in ``core`` because both sides need it: the GUI text in ``gui`` and the
+validation messages in ``core.lua_syntax``. This module **does not depend on Tk**,
+so plain logic scripts can use it as well.
 
-约定：
-- **默认英文**（开源项目，README 以英文为主）。
-- 每条文案是 ``(en, zh)`` 二元组；取值只看当前语言，缺失时回退英文。
-- 带占位符的用 ``str.format`` 的 ``{name}`` 写法。文案里若真有花括号必须写两遍
-  （例如 ``table {{...}}``），否则 ``format`` 会把它当占位符。
+Conventions:
+- **English by default** (open-source project, the README is mainly English).
+- Every message is an ``(en, zh)`` tuple; lookup uses the current language and
+  falls back to English when it is missing.
+- Placeholders use ``str.format``'s ``{name}`` syntax. A literal brace inside a
+  message must be doubled (e.g. ``table {{...}}``), otherwise ``format`` treats it
+  as a placeholder.
 """
 
-#: 可选语言：(写进配置的键, 下拉框显示的名字)。
-#: 语言名用各自的母语写法，不翻译 —— 界面是英文时也要能认出「中文」。
+#: Available languages: (key written to the config, name shown in the dropdown).
+#: Names are written in their own language and never translated - "Chinese" must be
+#: recognisable even while the UI is English.
 LANGUAGES = (("en", "English"), ("zh", "中文"))
 
-#: 默认语言（配置里没有 language 字段时用它）
+#: Default language (used when the config has no ``language`` field)
 DEFAULT_LANGUAGE = "en"
 
-#: 语言键 -> 索引（en=0, zh=1），与下面二元组的顺序一致
+#: Language key -> index (en=0, zh=1), matching the order of the tuples below
 _LANG_INDEX = {"en": 0, "zh": 1}
 
 
 # ══════════════════════════════════════════════════════════════════
-# 文案表
+    # Text table
 # ══════════════════════════════════════════════════════════════════
 
 _STRINGS = {
-    # ── 应用 / 窗口 ─────────────────────────────────────────────
+        # ── Application / window ────────────────────────────
     "app.title": ("Table Exporter", "导表管理器"),
     "about.title": ("About", "关于"),
     "about.body": (
@@ -34,7 +38,7 @@ _STRINGS = {
         "导表管理器 v2.0\n基于 ttkbootstrap 构建",
     ),
 
-    # ── 菜单栏 ──────────────────────────────────────────────────
+        # ── Menu bar ─────────────────────────────────────────
     "menu.file": ("File", "文件"),
     "menu.quit": ("Quit  Ctrl+Q", "退出  Ctrl+Q"),
     "menu.export": ("Export", "导出"),
@@ -45,25 +49,25 @@ _STRINGS = {
     "menu.help": ("Help", "帮助"),
     "menu.about": ("About", "关于"),
 
-    # ── 顶栏 / 面板标题 ─────────────────────────────────────────
+        # ── Top bar / panel titles ────────────────────────
     "topbar.title": ("📊  Table Exporter", "📊  导表管理器"),
     "panel.tables": ("  Tables  ", "  表格列表  "),
     "panel.projects": ("  Projects  ", "  项目管理  "),
     "label.project": ("Project", "项目"),
 
-    # ── 搜索与排序 ──────────────────────────────────────────────
+        # ── Search and sorting ─────────────────────────────
     "search.placeholder": ("Search tables...", "搜索表格名称..."),
     "sort.name": ("Name", "名称"),
     "sort.time": ("Time", "时间"),
 
-    # ── 列表状态 ────────────────────────────────────────────────
+        # ── List state ──────────────────────────────────────
     "list.no_dir": ("📂  Set a table directory first", "📂  请先配置表格目录"),
     "list.no_files": ("📭  No table file found", "📭  未找到表格文件"),
     "list.no_match": ("🔍  No match", "🔍  无匹配结果"),
     "list.count": ("({n} tables)", "({n} 个表格)"),
     "list.count_match": ("({total} tables, {n} matched)", "({total} 个表格, 匹配 {n} 个)"),
 
-    # ── 项目配置 ────────────────────────────────────────────────
+        # ── Project configuration ───────────────────────────
     "section.config": ("Project Configuration", "项目配置"),
     "field.project_name": ("Project name", "项目名称"),
     "field.source_dir": ("Table directory", "表格目录"),
@@ -71,14 +75,14 @@ _STRINGS = {
     "field.server_output": ("Server output", "服务端输出"),
     "btn.browse": ("Browse", "浏览"),
 
-    # ── 快捷操作 ────────────────────────────────────────────────
+        # ── Quick actions ───────────────────────────────────
     "section.actions": ("Actions", "快捷操作"),
     "btn.save": ("Save", "保存配置"),
     "btn.add_project": ("Add Project", "添加项目"),
     "btn.delete_project": ("Delete Project", "删除项目"),
     "btn.clear_log": ("Clear Log", "清除日志"),
 
-    # ── 日志区 / 状态 ───────────────────────────────────────────
+        # ── Log pane / status ──────────────────────────────
     "section.log": ("Log", "日志"),
     "status.ready": ("Ready", "就绪"),
     "status.checking": ("Checking... {i}/{n}", "校验中... {i}/{n}"),
@@ -87,7 +91,7 @@ _STRINGS = {
     "status.done_failed": ("Done ({n} failed)", "完成 ({n} 个失败)"),
     "status.aborted": ("Aborted: {n} data error(s)", "已中断：{n} 处数据错误"),
 
-    # ── 底栏按钮 ────────────────────────────────────────────────
+        # ── Bottom bar buttons ──────────────────────────────
     "btn.select_all": ("Select All", "全选"),
     "btn.invert": ("Invert", "反选"),
     "btn.refresh": ("Refresh", "刷新"),
@@ -96,7 +100,7 @@ _STRINGS = {
     "btn.svn_update": ("Update Tables", "更新表格"),
     "btn.svn_commit": ("Commit Tables", "提交表格"),
 
-    # ── 对话框标题 / 目录选择 ───────────────────────────────────
+        # ── Dialog titles / directory pickers ──────────
     "dlg.error": ("Error", "错误"),
     "dlg.notice": ("Notice", "提示"),
     "dlg.data_error": ("Data Validation Failed", "数据校验失败"),
@@ -104,7 +108,7 @@ _STRINGS = {
     "dlg.choose_client": ("Select the client output directory", "选择客户端输出目录"),
     "dlg.choose_server": ("Select the server output directory", "选择服务端输出目录"),
 
-    # ── 提示与报错 ──────────────────────────────────────────────
+        # ── Prompts and errors ─────────────────────────────
     "msg.project_name_required": ("Project name cannot be empty", "项目名称不能为空"),
     "msg.keep_one_project": ("Keep at least one project", "至少保留一个项目"),
     "msg.no_output_dir": (
@@ -124,7 +128,7 @@ _STRINGS = {
         "程序内部出错，本次操作已中止：\n\n{err}\n\n详细信息已追加到：\n{path}",
     ),
 
-    # ── 数据错误弹窗 ────────────────────────────────────────────
+        # ── Data error dialog ─────────────────────────────
     "dlg.data_error_header": (
         "Found {n} data error(s). Export aborted; nothing was written to the output directories.",
         "发现 {n} 处数据错误，已中断导出，目标目录没有写入任何文件。",
@@ -135,7 +139,7 @@ _STRINGS = {
         "请先去源表把这些格子改掉，再重新导出。",
     ),
 
-    # ── 日志行 ──────────────────────────────────────────────────
+        # ── Log lines ────────────────────────────────────────
     "log.theme_switched": ("Theme switched to {name}", "主题已切换为 {name}"),
     "log.language_switched": ("Language switched to {name}", "语言已切换为 {name}"),
     "log.internal_error": ("Internal error: {err}", "内部错误：{err}"),
@@ -170,7 +174,7 @@ _STRINGS = {
         "已在终端执行 svn {cmd}：{path}",
     ),
 
-    # ── Lua 校验：定位与分类 ────────────────────────────────────
+        # ── Lua validation: location and category ───────
     "err.kind.lua": ("Lua syntax error", "Lua 语法错误"),
     "err.kind.number": ("Invalid number", "数字格式错误"),
     "err.where_cell": (
@@ -184,7 +188,7 @@ _STRINGS = {
         "{kind}: {file} / {sheet} / {where} / 字段 {field} -> {error} ｜ 内容: {preview}",
     ),
 
-    # ── Lua 校验：语法报错 ──────────────────────────────────────
+        # ── Lua validation: syntax errors ────────────────
     "syn.unclosed_comment": ("Comment block is not closed", "注释块没有闭合"),
     "syn.unclosed_long_string": ("Long string {tok} is not closed", "长字符串 {tok} 没有闭合"),
     "syn.unterminated_string": (
@@ -229,7 +233,7 @@ _STRINGS = {
     "syn.with_pos": ("{msg} (position {pos})", "{msg}（位置 {pos}）"),
     "syn.eof": ("end of content", "内容结束"),
 
-    # ── Lua 校验：全角字符提示（填表最常见的手误）────────────────
+        # -- Lua validation: full-width character hints (the most common typo) --
     "char.fullwidth_lparen": (
         "'（' (full-width left parenthesis; use ASCII '(')",
         "'（'（全角左括号，应该用半角 '('）",
@@ -276,7 +280,7 @@ _STRINGS = {
     ),
     "char.fullwidth_space": ("full-width space", "全角空格"),
 
-    # ── Lua 校验：number 列 ─────────────────────────────────────
+        # ── Lua validation: number columns ──────────────────
     "num.not_a_number": (
         "Not a valid number (cannot be converted to a Lua number)",
         "不是合法数字（无法转换成 lua 数字）",
@@ -293,10 +297,10 @@ _STRINGS = {
 
 
 # ══════════════════════════════════════════════════════════════════
-# 对外接口
+# Public interface
 # ══════════════════════════════════════════════════════════════════
 
-#: 当前语言（模块级单例；界面启动时 set_language 一次即可）
+#: Current language (module-level singleton; set once with set_language at startup)
 _language = DEFAULT_LANGUAGE
 
 
@@ -331,10 +335,11 @@ def language_label(code=None):
 
 
 def t(key, **kwargs):
-    """取文案。缺 key 时原样返回 key（便于发现遗漏），格式化失败也退回原文。
+    """Look up a message. A missing key returns the key itself (so gaps get noticed),
+    and a formatting failure also returns the raw text.
 
-    格式化失败**不抛异常**是为了界面健壮：一条文案写错占位符，不该让整个
-    导出流程崩掉。
+    A formatting failure **never raises**, to keep the UI robust: one message with
+    a wrong placeholder must not bring the whole export down.
     """
     entry = _STRINGS.get(key)
     if entry is None:
@@ -350,9 +355,11 @@ def t(key, **kwargs):
 
 
 def language_from_config(config_path):
-    """从 ``projects.json`` 读语言偏好；文件不存在 / 字段缺失都用默认语言。
+    """Read the language preference from ``projects.json``; a missing file or field
+    falls back to the default language.
 
-    默认**必须**是英文 —— 首次启动、配置被删、配置文件损坏，都应回到英文。
+    The default **must** be English - first launch, a deleted config and a broken
+    config all end up in English.
     """
     import json
     import os

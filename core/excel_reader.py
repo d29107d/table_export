@@ -21,7 +21,7 @@ def _find_last_column(ws, row_num):
 
 
 def _last_used_column(ws, row_num):
-    """行内最后一个非空单元格的列号（列中间有空洞也能跨过去）。"""
+    """Column number of the last non-empty cell in the row (gaps in between are crossed)."""
     last = 0
     for idx, cell in enumerate(ws[row_num], start=1):
         if cell.value is not None:
@@ -29,18 +29,18 @@ def _last_used_column(ws, row_num):
     return last
 
 
-#: 表头行的探测顺序（第 5 行是字段说明行，正常表都有；个别表可能留空）
+#: Order in which header rows are probed (row 5 holds the field comments and is present in most sheets; a few leave it blank)
 _HEADER_ROWS = (5, 7, 6, 8)
 
-#: 表头块的四行：注释 / scope / 类型 / 字段名
+#: The four rows of the header block: comment / scope / type / field name
 _HEADER_BLOCK_ROWS = (5, 6, 7, 8)
 
-#: 「断点列」= E 列（第 5 列）
+#: The "break column" is E (column 5)
 _BREAK_COLUMN = 5
 
 
 def _header_block_empty(ws, col):
-    """第 5~8 行在该列上是否全空（即这列没有注释/scope/类型/字段名，根本不是字段列）。"""
+    """Whether rows 5~8 are all empty in this column (no comment/scope/type/field name, so it is not a field column at all)."""
     for r in _HEADER_BLOCK_ROWS:
         if r > ws.max_row:
             continue
@@ -51,15 +51,17 @@ def _header_block_empty(ws, col):
 
 
 def _cut_at_break_column(ws):
-    """E 列是不是这张表的「表头断点」——是则 E 及其右侧的列都不导出。
+    """Is column E the header "break column" of this sheet? If so, E and everything to its right is not exported.
 
-    约定：E 列是留给作者的分隔列，备注/草稿写在它右边。
-    即 A~D 是正常字段，E 列空，F 及右侧即使写了字段名或内容也不导出。
+    Convention: column E is a separator reserved for the author, with notes and
+    drafts written to its right. A~D carry the real fields, E is empty, and F
+    onwards is not exported even when it holds field names or data.
 
-    生效条件：A~D 四列的表头块（注释 / scope / 类型 / 字段名）都完整，
-    也就是 E 确实是表头**连续段的断点**。
-    这样才能避免误伤「中间某列空、右边还有正常字段」的表——
-    它们的表头断点不在 E 列，在别处，中间的空列只是缺列而非结束。
+    It only applies when the A~D header block (comment / scope / type / field name)
+    is complete, i.e. E really is the break of a continuous header. That keeps
+    sheets with a gap in the middle - and more real fields to the right - safe:
+    their break is not at E but somewhere else, and the empty column in the middle
+    is a missing column rather than the end of the table.
     """
     if not _header_block_empty(ws, _BREAK_COLUMN):
         return False
@@ -67,15 +69,18 @@ def _cut_at_break_column(ws):
 
 
 def _resolve_column_count(ws):
-    """扫描范围 = 第 5 行最靠右的非空单元格列号（第 5 行空则退到 7/6/8 行）。
+    """Scan range = the right-most non-empty cell in row 5 (falling back to rows 7 / 6 / 8 when row 5 is blank).
 
-    两个要点（都对齐旧工具）：
-    1. 取"最右非空"而不是"遇到空列就停"——中间某列空、更右边仍有正常字段时，
-       右侧那些字段要一并带上。
-    2. 只看第 5 行，不把 6/7/8 行一起取最大——右侧可能存在只填了字段名、
-       却没有第 5 行说明的脏列，那种不导出。
+    Two rules, both matching the legacy tool:
+    1. Take the right-most non-empty cell rather than stopping at the first empty
+       column - when a column in the middle is empty but real fields continue to the
+       right, those fields must be included.
+    2. Look at row 5 only and do not take the maximum over rows 6/7/8 - the right
+       side may hold junk columns that have a field name but no row-5 comment, and
+       those are not exported.
 
-    例外：表头在 ``_BREAK_COLUMN``（E 列）断开时，E 及右侧一律不算，见 ``_cut_at_break_column``。
+    Exception: when the header breaks at ``_BREAK_COLUMN`` (column E), E and
+    everything to its right is ignored; see ``_cut_at_break_column``.
     """
     for r in _HEADER_ROWS:
         if r > ws.max_row:
@@ -103,22 +108,22 @@ def parse_sheet(ws):
         return None
 
 
-#: 需要做内容校验的单元格类型
-#: - ``table`` / ``any``：内容是"原样写进 lua"的，做 Lua 语法校验
-#: - ``number``：填了非数字会被静默写成 nil（数据丢失），做数字格式校验
+#: Cell types whose content is validated
+#: - ``table`` / ``any``: written into the lua verbatim, so validate the Lua syntax
+#: - ``number``: a non-numeric value is silently written as nil (data loss), so validate the number format
 _CHECKED_TYPES = ("table", "any", "number")
 
-#: tiny 表的值固定写在 E 列（第 5 列：备注/scope/类型/字段名/值）
+#: A tiny table always keeps its value in column E (column 5: comment/scope/type/field/name -> value)
 _TINY_VALUE_COLUMN = 5
 
 
 def _error_kind(type_str):
-    """错误分类，决定日志里显示成"Lua 语法错误"还是"数字格式错误"。"""
+    """Error category: decides whether the log says 'Lua syntax error' or 'number format error'."""
     return "number" if type_str == "number" else "lua"
 
 
 def _check_cell(value, type_str):
-    """校验单元格内容。通过（或无需校验）返回 None，否则返回错误描述。"""
+    """Validate a cell's content. Returns None when it passes (or needs no check), otherwise the error description."""
     if type_str not in _CHECKED_TYPES:
         return None
     if value is None:
@@ -132,12 +137,14 @@ def _check_cell(value, type_str):
 
 
 def _collect_base_syntax_errors(data_rows, types, field_names, first_row=9):
-    """逐行逐列校验受检类型的单元格，收集错误。
+    """Validate the cells of the checked types row by row, column by column, collecting errors.
 
-    只查字段名合法的列（右侧脏列不导出、也就没有校验的意义）。
-    ``first_row`` 是数据区首行的 Excel 行号（base 表固定为 9），用于把
-    下标还原成用户在 Excel 里看到的行号；``col`` 同理，是 1 起算的 Excel 列号，
-    日志里会渲染成 ``B12`` 这种单元格地址，方便直接定位。
+    Only columns with a valid field name are inspected (junk columns on the right
+    are not exported, so validating them is meaningless). ``first_row`` is the Excel
+    row number of the first data row (always 9 for base sheets) and converts an index
+    back into the row number the user sees in Excel; ``col`` likewise is the 1-based
+    Excel column number, rendered in the log as a cell address such as ``B12`` so the
+    problem can be located directly.
     """
     errors = []
     for i, row in enumerate(data_rows):
@@ -165,7 +172,7 @@ def _collect_base_syntax_errors(data_rows, types, field_names, first_row=9):
 
 
 def _collect_tiny_syntax_errors(fields):
-    """tiny 表同理：每个字段一行，行号直接取 Excel 行号，值恒在 E 列。"""
+    """Same for tiny sheets: one row per field, the row number is the Excel row number, and the value always sits in column E."""
     errors = []
     for f in fields:
         ftype = f.get("type")
@@ -190,10 +197,12 @@ def _cell_value(ws, row, col):
 
 
 def _parse_meta(ws):
-    """解析表头元信息。
+    """Parse the table-level metadata.
 
-    非配置 sheet（说明页、空 sheet、格式不规范的关键数据页）返回 None，调用方跳过。
-    判定依据与旧导表工具一致：B1 必须是 ``base`` / ``tiny``，且 B2 是合法的 ``*.lua`` 文件名。
+    Returns None for a sheet that is not a configuration table (a notes page, an
+    empty sheet, a badly formatted key sheet); the caller skips it. The rule matches
+    the legacy exporter: B1 must be ``base`` / ``tiny`` and B2 a valid ``*.lua`` file
+    name.
     """
     meta = {}
 
@@ -246,9 +255,11 @@ def _parse_base(ws, meta):
         row8_val = ws.cell(row=8, column=i).value
         field_names.append(str(row8_val).strip() if row8_val is not None else "")
 
-    # 只有字段名合法的列才算"有效列"。判定数据区是否结束、以及第 5 行的截断
-    # 都只看这些列：表右侧常残留一大片脏数据（字段名不是合法 lua 标识符），
-    # 若把它们算进来，数据区中间的空行就会被当成"有数据"，多导出整整一段。
+    # Only columns with a valid field name count as an "effective column". Deciding
+        # where the data area ends, and the row-5 cut-off, both look at these columns
+        # only: the right-hand side of a sheet often carries a block of junk whose field
+    # names are not valid lua identifiers, and counting it would make a blank row in
+    # the middle of the data area look like data and export an entire extra block.
     valid_cols = {i for i in range(1, col_count + 1)
                   if valid_field_name(field_names[i - 1])}
 
@@ -263,13 +274,16 @@ def _parse_base(ws, meta):
         if has_data:
             data_rows.append(row_vals)
         else:
-            # 数据区遇到（有效列上）整行为空即结束：旧工具在"左侧真空行、
-            # 右侧还留着脏数据"的位置同样就此收尾
+                        # The data area ends at the first row that is entirely empty across the
+                        # effective columns: the legacy tool wraps up at the same place, even when
+            # junk is still lying to the right of that blank row.
             break
 
-    # 第 9 行（base 表数据区首行）为空 => 整表视为无数据，直接跳过、不生成 lua 文件。
-    # 有些表第 9 行留空、数据从第 10 行才开始，旧工具同样不导出它们。
-    # 注意这里不能"跳过空行继续往下读"——那会让这类表被当成有数据而误导出。
+        # Row 9 (the first data row of a base sheet) being empty => the whole table counts
+        # as having no data: skip it and write no lua file at all. Some sheets leave row 9
+        # blank and start their data on row 10, and the legacy tool skips those as well.
+    # Note that we must not "skip the blank row and keep reading" - that would export
+    # those sheets by mistake.
     if not data_rows:
         return None
 
@@ -296,7 +310,8 @@ def _parse_tiny(ws, meta):
     for r in range(6, ws.max_row + 1):
         row = [ws.cell(row=r, column=c).value for c in range(1, col_count + 1)]
         if all(v is None for v in row):
-            # 空行跳过，继续往下读（表里确实存在"失败特效"这种空一行之后再写的字段）
+                        # Blank rows are skipped and reading continues (a tiny sheet really can leave
+            # a gap before the next field)
             continue
 
         config_note = str(row[0]).strip() if row[0] is not None else ""
@@ -317,7 +332,8 @@ def _parse_tiny(ws, meta):
             "row": r,
         })
 
-    # 与 base 表同理：一个字段都没有的 tiny 表不生成 lua（当前源目录无此情况，仅作兜底）
+        # Same rule as base sheets: a tiny sheet with no field at all produces no lua file
+    # (never seen in the current source tree, kept as a safety net)
     if not fields:
         return None
 
