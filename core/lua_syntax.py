@@ -24,6 +24,7 @@
 
 import re
 
+from .i18n import t
 from .lua_writer import to_number_literal
 
 #: Lua 关键字
@@ -108,7 +109,7 @@ def _tokenize(text):
                 close = ']' + m.group(1) + ']'
                 j = text.find(close, m.end())
                 if j < 0:
-                    raise LuaSyntaxError('注释块没有闭合', i)
+                    raise LuaSyntaxError(t("syn.unclosed_comment"), i)
                 i = j + len(close)
             else:
                 j = text.find('\n', i)
@@ -121,7 +122,7 @@ def _tokenize(text):
             close = ']' + m.group(1) + ']'
             j = text.find(close, m.end())
             if j < 0:
-                raise LuaSyntaxError('长字符串 %s 没有闭合' % m.group(0), i)
+                raise LuaSyntaxError(t("syn.unclosed_long_string", tok=m.group(0)), i)
             end = j + len(close)
             tokens.append(('string', text[i:end], i))
             i = end
@@ -131,7 +132,7 @@ def _tokenize(text):
         if ch in '"\'':
             end, ok = _scan_short_string(text, i)
             if not ok:
-                raise LuaSyntaxError('字符串缺少结尾的 %s' % ch, i)
+                raise LuaSyntaxError(t("syn.unterminated_string", ch=ch), i)
             tokens.append(('string', text[i:end], i))
             i = end
             continue
@@ -143,7 +144,7 @@ def _tokenize(text):
                 tokens.append(('number', m.group(0), i))
                 i = m.end()
                 continue
-            raise LuaSyntaxError('数字写得不对', i)
+            raise LuaSyntaxError(t("syn.bad_number"), i)
 
         # 名字 / 关键字
         m = _NAME_RE.match(text, i)
@@ -160,45 +161,48 @@ def _tokenize(text):
                 i += len(sym)
                 break
         else:
-            raise LuaSyntaxError('出现了 Lua 里不合法的字符 %s' % _char_desc(ch), i)
+            raise LuaSyntaxError(t("syn.bad_char", desc=_char_desc(ch)), i)
 
     tokens.append(('eof', '', n))
     return tokens
 
 
 def _char_desc(ch):
-    """把字符描述成人话（全角字符点出来，这几乎是填表最常见的手误）。"""
+    """把字符描述成人话（全角字符点出来，这几乎是填表最常见的手误）。
+
+    文案走 ``i18n``：这些提示要跟着界面语言走，英文用户同样看得懂。
+    """
     if ch == '（':
-        return "'（'（全角左括号，应该用半角 '('）"
+        return t("char.fullwidth_lparen")
     if ch == '）':
-        return "'）'（全角右括号，应该用半角 ')'）"
+        return t("char.fullwidth_rparen")
     if ch == '｛':
-        return "'｛'（全角左花括号，应该用半角 '{'）"
+        return t("char.fullwidth_lbrace")
     if ch == '｝':
-        return "'｝'（全角右花括号，应该用半角 '}'）"
+        return t("char.fullwidth_rbrace")
     if ch == '【' or ch == '】':
-        return "'%s'（方括号不对，Lua 的表格要用 { }）" % ch
+        return t("char.square_bracket", ch=ch)
     if ch == '：':
-        return "'：'（全角冒号，应该用半角 ':'）"
+        return t("char.fullwidth_colon")
     if ch in '，、':
-        return "'%s'（全角逗号，应该用半角 ','）" % ch
+        return t("char.fullwidth_comma", ch=ch)
     if ch == '；':
-        return "'；'（全角分号，应该用半角 ';'）"
+        return t("char.fullwidth_semicolon")
     if ch == '＝':
-        return "'＝'（全角等号，应该用半角 '='）"
+        return t("char.fullwidth_equal")
     if ch in '“”':
-        return "'%s'（中文引号，应该用半角双引号 '\"'）" % ch
+        return t("char.curly_double_quote", ch=ch)
     if ch in '‘’':
-        return "'%s'（中文引号，应该用半角单引号 \"'\"）" % ch
+        return t("char.curly_single_quote", ch=ch)
     if ch == '　':
-        return '全角空格'
+        return t("char.fullwidth_space")
     return repr(ch)
 
 
 def _describe(token):
     kind, value, _ = token
     if kind == 'eof':
-        return '内容结束'
+        return t("syn.eof")
     return repr(value)
 
 
@@ -229,7 +233,7 @@ class _Parser:
         tok = self.peek()
         if tok[0] != 'symbol' or tok[1] != sym:
             raise LuaSyntaxError(
-                "这里应该是 '%s'，实际是 %s" % (sym, _describe(tok)), tok[2])
+                t("syn.expect_symbol", sym=sym, found=_describe(tok)), tok[2])
         return self.advance()
 
     # -- 表达式（优先级爬升，与 Lua 官方解析器一致）--
@@ -238,7 +242,7 @@ class _Parser:
         self.expression(0)
         tok = self.peek()
         if tok[0] != 'eof':
-            raise LuaSyntaxError('表达式后面还有多余的内容 %s' % _describe(tok), tok[2])
+            raise LuaSyntaxError(t("syn.trailing", found=_describe(tok)), tok[2])
 
     def expression(self, limit):
         tok = self.peek()
@@ -272,8 +276,8 @@ class _Parser:
                 self.advance()
                 return
             if value == 'function':
-                raise LuaSyntaxError('配置单元格里不支持内联 function 定义', pos)
-            raise LuaSyntaxError('这里不该出现关键字 %r' % value, pos)
+                raise LuaSyntaxError(t("syn.no_inline_function"), pos)
+            raise LuaSyntaxError(t("syn.unexpected_keyword", kw=repr(value)), pos)
         if kind == 'name':
             self.advance()
             self._suffixes()
@@ -294,8 +298,7 @@ class _Parser:
                 return
 
         raise LuaSyntaxError(
-            '这里应该是一个值（数字 / 字符串 / 表格 {...} / 变量），实际是 %s'
-            % _describe(tok), pos)
+            t("syn.expect_value", found=_describe(tok)), pos)
 
     def _table_body(self):
         """``{`` 已消费。"""
@@ -333,7 +336,7 @@ class _Parser:
                 tok = self.peek()
                 if tok[0] != 'name':
                     raise LuaSyntaxError(
-                        "'.' 后面应该是字段名，实际是 %s" % _describe(tok), tok[2])
+                        t("syn.expect_field_name", found=_describe(tok)), tok[2])
                 self.advance()
             elif self.at_symbol('['):
                 self.advance()
@@ -344,7 +347,7 @@ class _Parser:
                 tok = self.peek()
                 if tok[0] != 'name':
                     raise LuaSyntaxError(
-                        "':' 后面应该是方法名，实际是 %s" % _describe(tok), tok[2])
+                        t("syn.expect_method_name", found=_describe(tok)), tok[2])
                 self.advance()
                 self._call_args()
             elif self.at_symbol('(') or self.at_symbol('{') or self.peek()[0] == 'string':
@@ -373,7 +376,7 @@ class _Parser:
             self.expect(')')
             return
         raise LuaSyntaxError(
-            '函数调用后面应该是参数列表，实际是 %s' % _describe(tok), tok[2])
+            t("syn.expect_args", found=_describe(tok)), tok[2])
 
 
 # ── 对外接口 ─────────────────────────────────────────────────────
@@ -384,9 +387,9 @@ def validate_lua_value(text):
         _Parser(_tokenize(text)).parse()
     except LuaSyntaxError as e:
         pos = len(text) if e.pos is None else e.pos
-        return '%s（位置 %d）' % (e.message, pos + 1)
+        return t("syn.with_pos", msg=e.message, pos=pos + 1)
     except RecursionError:
-        return '嵌套层级过深，无法解析'
+        return t("syn.too_deep")
     return None
 
 
@@ -417,14 +420,14 @@ def validate_number(value):
     try:
         literal = to_number_literal(value)
     except (ValueError, OverflowError, TypeError):
-        return '不是合法数字（无法转换成 lua 数字）'
+        return t("num.not_a_number")
     # to_number_literal 对"填了 true/false 文本"的布尔值返回 'true'/'false'，那是合法的
     if literal in ('true', 'false'):
         return None
     if literal is None:
-        return '不是合法数字，导出后会变成 nil（数据丢失）'
+        return t("num.would_be_nil")
     if not _NUM_LITERAL_RE.match(literal):
-        return '不是合法数字（%s）' % literal
+        return t("num.not_a_number_detail", literal=literal)
     return None
 
 
@@ -477,11 +480,11 @@ def format_syntax_errors(table_info, compact=False):
 
         # 单元格地址 + 行列号，两种档位都带（用户明确要求弹窗里也要有"第 X 行 Y 列"）
         if ref:
-            where = '单元格 %s（第 %s 行 %s 列）' % (ref, row, column_letter(col))
+            where = t("err.where_cell", ref=ref, row=row, col=column_letter(col))
         elif row is not None:
-            where = '第 %s 行' % row
+            where = t("err.where_row", row=row)
         else:
-            where = '位置未知'
+            where = t("err.where_unknown")
 
         if compact:
             err = str(e.get('error', ''))
@@ -494,9 +497,8 @@ def format_syntax_errors(table_info, compact=False):
         preview = str(e.get('value', '')).replace('\r\n', ' ').replace('\n', ' ').strip()
         if len(preview) > 60:
             preview = preview[:60] + '…'
-        kind = '数字格式错误' if e.get('kind') == 'number' else 'Lua 语法错误'
+        kind = t("err.kind.number" if e.get('kind') == 'number' else "err.kind.lua")
 
-        lines.append(
-            '%s: %s / %s / %s / 字段 %s -> %s ｜ 内容: %s'
-            % (kind, source, sheet, where, e.get('field'), e.get('error'), preview))
+        lines.append(t("err.log_line", kind=kind, file=source, sheet=sheet, where=where,
+                       field=e.get('field'), error=e.get('error'), preview=preview))
     return lines

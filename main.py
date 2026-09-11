@@ -8,8 +8,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ttkbootstrap as ttkb
 from ttkbootstrap.constants import INFO, WARNING, SUCCESS, DANGER, PRIMARY
 
-from gui.main_window import MainWindow
+from gui.main_window import CONFIG_PATH, MainWindow
 from gui.platform_compat import IS_MAC, config_dir
+
+from core.i18n import language_from_config, set_language, t
 
 #: 首启 / theme.json 缺失时的默认主题。用 ttkbootstrap 2.x 的主题名：1.x 的
 #: litera / darkly 在 2.2 属 legacy 名，能用但会打 DeprecationWarning 且 3.0 会移除。
@@ -60,11 +62,13 @@ def _maximize(root):
 
 def main():
     initial_theme = load_theme()
+    # 语言要在建窗口之前定下来 —— 窗口标题、菜单都是建的时候就要用
+    initial_language = set_language(language_from_config(CONFIG_PATH))
 
-    root = ttkb.Window(title="导表管理器", themename=initial_theme, iconphoto=None,
+    root = ttkb.Window(title=t("app.title"), themename=initial_theme, iconphoto=None,
                        size=(1200, 750), minsize=(1000, 600))
 
-    app = MainWindow(root, initial_theme)
+    app = MainWindow(root, initial_theme, initial_language)
     _maximize(root)
     root.mainloop()
 

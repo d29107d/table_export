@@ -12,6 +12,7 @@ from ttkbootstrap.constants import PRIMARY, SECONDARY, SUCCESS, INFO, WARNING, D
 
 from core.excel_reader import list_excel_files, load_excel
 from core.exporter import export_table
+from core.i18n import DEFAULT_LANGUAGE, LANGUAGES, set_language, t
 from core.lua_syntax import format_syntax_errors
 from gui.platform_compat import (
     HAS_TOUCHPAD_SCROLL,
@@ -141,26 +142,32 @@ def _init_fonts(root):
     FONT_SMALL = (ui, 9)
     FONT_MONO = (mono, 10)
 
-#: 表格列表排序方式：(写进配置的键, 下拉框显示文案)
-SORT_OPTIONS = (("name", "名称"), ("time", "时间"))
+#: 表格列表排序方式（下拉框显示文案跟着语言走，见 ``MainWindow._sort_label``）
+SORT_KEYS = ("name", "time")
 #: 默认按名称排序
 DEFAULT_SORT = "name"
-_SORT_KEY2LABEL = {k: label for k, label in SORT_OPTIONS}
-_SORT_LABEL2KEY = {label: k for k, label in SORT_OPTIONS}
 
 #: 数据错误弹窗里最多列几条明细（`messagebox` 不能滚动，列太多会撑到屏幕外）
 _DIALOG_MAX_ERRORS = 10
 
 
 class MainWindow:
-    def __init__(self, root, initial_theme="bootstrap-light"):
+    def __init__(self, root, initial_theme="bootstrap-light", initial_language=None):
         self.root = root
         self.current_theme = initial_theme
         self.projects_data = load_projects()
+        #: 界面语言：优先用调用方给的（main.py 已经读过一次配置），其次配置文件，
+        #: 都没有就是英文。记在 projects.json 顶层，与 sort_by 同级。
+        self.language = set_language(
+            initial_language or self.projects_data.get("language") or DEFAULT_LANGUAGE)
         self.file_paths = []
         self._loading = False
         #: 触摸板滚动的像素累积器（Windows 用不到，Tk 8.6 也不会写它）
         self._touchpad_accum = 0.0
+        #: 需要跟着语言切换的控件：``(widget, i18n key)``
+        self._i18n_widgets = []
+        #: 搜索框占位符文案（随语言变化，过滤时要拿它比对"是不是空")
+        self._placeholder = ""
 
         # 必须在任何 _build_* 之前 —— 那些方法直接引用模块级的 FONT 常量
         _init_fonts(root)
@@ -233,7 +240,7 @@ class MainWindow:
 
         # Update placeholder color
         if hasattr(self, 'search_var'):
-            if self.search_var.get() == "搜索表格名称...":
+            if self.search_var.get() == self._placeholder:
                 self.search_entry.configure(fg=self.TEXT_SEC)
 
         # Update log text
@@ -269,31 +276,100 @@ class MainWindow:
     # ── Menu ─────────────────────────────────────────────────────
 
     def _build_menu(self):
+        """重建整个菜单栏。
+
+        切语言时也走这里，所以要先销毁旧的菜单栏（tk.Menu 的 label 不能只改一项，
+        整条重建最省事，也不会漏掉子菜单）。
+        """
+        if getattr(self, "_menubar", None) is not None:
+            self._menubar.destroy()
+
         self._menubar = tk.Menu(self.root, font=FONT_SMALL, bg=self.CARD, fg=self.TEXT,
                                 activebackground=self.ACCENT, activeforeground="white", borderwidth=0)
         self.root.config(menu=self._menubar)
 
-        file_menu = tk.Menu(self._menubar, tearoff=0, font=FONT_SMALL, bg=self.CARD, fg=self.TEXT,
-                            activebackground=self.ACCENT, activeforeground="white", borderwidth=0)
-        file_menu.add_command(label="退出  Ctrl+Q", command=self.root.quit)
-        self._menubar.add_cascade(label="文件", menu=file_menu)
+        file_menu = self._submenu()
+        file_menu.add_command(label=t("menu.quit"), command=self.root.quit)
+        self._menubar.add_cascade(label=t("menu.file"), menu=file_menu)
 
-        export_menu = tk.Menu(self._menubar, tearoff=0, font=FONT_SMALL, bg=self.CARD, fg=self.TEXT,
-                              activebackground=self.ACCENT, activeforeground="white", borderwidth=0)
-        export_menu.add_command(label="导出选中  Ctrl+E", command=self._export_selected)
-        export_menu.add_command(label="导出全部  Ctrl+Shift+E", command=self._export_all)
-        self._menubar.add_cascade(label="导出", menu=export_menu)
+        export_menu = self._submenu()
+        export_menu.add_command(label=t("menu.export_selected"), command=self._export_selected)
+        export_menu.add_command(label=t("menu.export_all"), command=self._export_all)
+        self._menubar.add_cascade(label=t("menu.export"), menu=export_menu)
 
-        self.theme_menu = tk.Menu(self._menubar, tearoff=0, font=FONT_SMALL, bg=self.CARD, fg=self.TEXT,
-                                  activebackground=self.ACCENT, activeforeground="white", borderwidth=0)
-        self._menubar.add_cascade(label="主题", menu=self.theme_menu)
+        self.theme_menu = self._submenu()
+        self._menubar.add_cascade(label=t("menu.theme"), menu=self.theme_menu)
         self._rebuild_theme_menu()
 
-        help_menu = tk.Menu(self._menubar, tearoff=0, font=FONT_SMALL, bg=self.CARD, fg=self.TEXT,
-                            activebackground=self.ACCENT, activeforeground="white", borderwidth=0)
-        help_menu.add_command(label="关于", command=lambda: messagebox.showinfo(
-            "关于", "导表管理器 v2.0\n基于 ttkbootstrap 构建"))
-        self._menubar.add_cascade(label="帮助", menu=help_menu)
+        # 语言菜单：夹在「主题」和「帮助」中间。两个选项用各自的母语写法，
+        # 界面是英文时也认得出「中文」。
+        self.language_menu = self._submenu()
+        self.language_var = tk.StringVar(value=self.language)
+        for code, label in LANGUAGES:
+            self.language_menu.add_radiobutton(
+                label=label, value=code, variable=self.language_var,
+                command=lambda c=code: self._switch_language(c))
+        self._menubar.add_cascade(label=t("menu.language"), menu=self.language_menu)
+
+        help_menu = self._submenu()
+        help_menu.add_command(label=t("menu.about"), command=lambda: messagebox.showinfo(
+            t("about.title"), t("about.body")))
+        self._menubar.add_cascade(label=t("menu.help"), menu=help_menu)
+
+    def _submenu(self):
+        """建一个与菜单栏同风格的下拉菜单。"""
+        return tk.Menu(self._menubar, tearoff=0, font=FONT_SMALL, bg=self.CARD, fg=self.TEXT,
+                       activebackground=self.ACCENT, activeforeground="white", borderwidth=0)
+
+    # ── Language ─────────────────────────────────────────────────
+
+    def _reg(self, widget, key):
+        """登记一个跟着语言走的控件，并按当前语言立刻设置文案。
+
+        用法：``self._reg(ttk.Label(frame), "field.source_dir").pack(...)`` ——
+        登记之后 ``_apply_language()`` 能把文字一次性全刷掉，不用到处写 refresh。
+        """
+        self._i18n_widgets.append((widget, key))
+        widget.configure(text=t(key))
+        return widget
+
+    def _switch_language(self, code):
+        """切换语言：改文案 + 重建菜单 + 落盘。"""
+        self.language = set_language(code)
+        self.projects_data["language"] = self.language
+        save_projects(self.projects_data)
+        self._apply_language()
+        self.root.title(t("app.title"))
+        self._log(t("log.language_switched", name=dict(LANGUAGES)[self.language]), "info")
+
+    def _apply_language(self):
+        """把当前语言应用到所有已登记的控件上（切语言后调用一次即可）。"""
+        for widget, key in self._i18n_widgets:
+            try:
+                widget.configure(text=t(key))
+            except tk.TclError:
+                pass
+
+        # 菜单栏整个重建：从菜单项回调里触发切换时，正在回调的那个菜单不能当场销毁
+        # （Tk 的菜单 grab 会残留、菜单卡住），所以推到空闲时再建。
+        self.root.after_idle(self._build_menu)
+
+        # 排序下拉框：值本身是文案，得连选项一起换，再按"键"把选中项对回去
+        if hasattr(self, "sort_combo"):
+            sort_key = self._current_sort_key()
+            self.sort_combo.configure(values=[self._sort_label(k) for k in SORT_KEYS])
+            self.sort_var.set(self._sort_label(sort_key))
+
+        # 搜索框占位符
+        if hasattr(self, "search_entry"):
+            self._install_placeholder()
+
+        # 列表里的空状态/计数文案是动态拼的，得重建
+        self._rebuild_checkbox_list()
+
+        # 状态栏文案：只在"就绪"这类静态状态下才能安全重写
+        if hasattr(self, "progress_label") and self.progress_var.get() == 0:
+            self.progress_label.config(text=t("status.ready"))
 
     def _rebuild_theme_menu(self):
         self.theme_menu.delete(0, tk.END)
@@ -315,9 +391,9 @@ class MainWindow:
             self._save_theme(name)
             self._apply_theme_colors()
             self._rebuild_theme_menu()
-            self._log(f"主题已切换为 {name}", "info")
+            self._log(t("log.theme_switched", name=name), "info")
         except Exception as e:
-            messagebox.showerror("错误", f"切换主题失败: {e}")
+            messagebox.showerror(t("dlg.error"), t("msg.theme_failed", err=e))
 
     def _toggle_dark_mode(self):
         """在 2.x 的浅色 / 暗色主题间切换。
@@ -369,8 +445,8 @@ class MainWindow:
         top_bar = ttk.Frame(self.root)
         top_bar.pack(side=tk.TOP, fill=tk.X, padx=8, pady=(8, 0))
 
-        ttk.Label(top_bar, text="📊  导表管理器", font=FONT_TITLE,
-                  bootstyle=PRIMARY).pack(side=tk.LEFT, padx=12, pady=6)
+        self._reg(ttk.Label(top_bar, font=FONT_TITLE, bootstyle=PRIMARY),
+                  "topbar.title").pack(side=tk.LEFT, padx=12, pady=6)
 
         self.theme_toggle_btn = ttk.Button(
             top_bar,
@@ -387,21 +463,21 @@ class MainWindow:
 
         left_group = ttk.Frame(bottom)
         left_group.pack(side=tk.LEFT, padx=2, pady=4)
-        ttk.Button(left_group, text="全选", bootstyle=(SECONDARY, OUTLINE),
-                   command=self._select_all).pack(side=tk.LEFT, padx=2)
-        ttk.Button(left_group, text="反选", bootstyle=(SECONDARY, OUTLINE),
-                   command=self._deselect_all).pack(side=tk.LEFT, padx=2)
-        ttk.Button(left_group, text="刷新", bootstyle=(SECONDARY, OUTLINE),
-                   command=self._refresh_table_list).pack(side=tk.LEFT, padx=2)
+        self._reg(ttk.Button(left_group, bootstyle=(SECONDARY, OUTLINE),
+                             command=self._select_all), "btn.select_all").pack(side=tk.LEFT, padx=2)
+        self._reg(ttk.Button(left_group, bootstyle=(SECONDARY, OUTLINE),
+                             command=self._deselect_all), "btn.invert").pack(side=tk.LEFT, padx=2)
+        self._reg(ttk.Button(left_group, bootstyle=(SECONDARY, OUTLINE),
+                             command=self._refresh_table_list), "btn.refresh").pack(side=tk.LEFT, padx=2)
 
         ttk.Separator(bottom, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=6)
 
         center_group = ttk.Frame(bottom)
         center_group.pack(side=tk.LEFT, padx=2, pady=4)
-        ttk.Button(center_group, text="导出选中", bootstyle=SUCCESS,
-                   command=self._export_selected).pack(side=tk.LEFT, padx=2)
-        ttk.Button(center_group, text="导出全部", bootstyle=PRIMARY,
-                   command=self._export_all).pack(side=tk.LEFT, padx=2)
+        self._reg(ttk.Button(center_group, bootstyle=SUCCESS,
+                             command=self._export_selected), "btn.export_selected").pack(side=tk.LEFT, padx=2)
+        self._reg(ttk.Button(center_group, bootstyle=PRIMARY,
+                             command=self._export_all), "btn.export_all").pack(side=tk.LEFT, padx=2)
 
         # macOS 上没装 svn 时，这两个按钮点了只会弹错误 —— 直接不显示，连分隔线
         # 一起省掉。Windows 保持原样（那边靠 TortoiseSVN 或系统 svn，检测方式不同）。
@@ -410,15 +486,15 @@ class MainWindow:
 
             svn_group = ttk.Frame(bottom)
             svn_group.pack(side=tk.LEFT, padx=2, pady=4)
-            ttk.Button(svn_group, text="更新表格", bootstyle=(INFO, OUTLINE),
-                       command=self._svn_update).pack(side=tk.LEFT, padx=2)
-            ttk.Button(svn_group, text="提交表格", bootstyle=(INFO, OUTLINE),
-                       command=self._svn_commit).pack(side=tk.LEFT, padx=2)
+            self._reg(ttk.Button(svn_group, bootstyle=(INFO, OUTLINE),
+                                 command=self._svn_update), "btn.svn_update").pack(side=tk.LEFT, padx=2)
+            self._reg(ttk.Button(svn_group, bootstyle=(INFO, OUTLINE),
+                                 command=self._svn_commit), "btn.svn_commit").pack(side=tk.LEFT, padx=2)
 
     # ── Table list panel (left) ──────────────────────────────────
 
     def _build_table_panel(self, parent):
-        card = ttk.LabelFrame(parent, text="  表格列表  ", bootstyle=PRIMARY)
+        card = self._reg(ttk.LabelFrame(parent, bootstyle=PRIMARY), "panel.tables")
         card.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
 
         # Header: count + project selector
@@ -429,8 +505,8 @@ class MainWindow:
                                            bootstyle=SECONDARY)
         self.table_count_label.pack(side=tk.LEFT)
 
-        ttk.Label(header_frame, text="项目", font=FONT_SMALL,
-                  bootstyle=SECONDARY).pack(side=tk.RIGHT, padx=(0, 4))
+        self._reg(ttk.Label(header_frame, font=FONT_SMALL, bootstyle=SECONDARY),
+                  "label.project").pack(side=tk.RIGHT, padx=(0, 4))
         self.project_combo = ttk.Combobox(header_frame, state="readonly", width=16, font=FONT)
         self.project_combo.pack(side=tk.RIGHT)
         self.project_combo.bind("<<ComboboxSelected>>", self._on_project_switch)
@@ -447,7 +523,7 @@ class MainWindow:
             value=self._sort_label(self.projects_data.get("sort_by", DEFAULT_SORT)))
         self.sort_combo = ttk.Combobox(
             search_frame, textvariable=self.sort_var, state="readonly",
-            width=6, font=FONT_SMALL, values=[label for _, label in SORT_OPTIONS])
+            width=6, font=FONT_SMALL, values=[self._sort_label(k) for k in SORT_KEYS])
         self.sort_combo.pack(side=tk.RIGHT, padx=(6, 0))
         self.sort_combo.bind("<<ComboboxSelected>>", self._on_sort_change)
 
@@ -464,8 +540,7 @@ class MainWindow:
         self.search_entry = tk.Entry(self.search_inner, textvariable=self.search_var, font=FONT,
                                      fg=self.TEXT, bg=self.SEARCH_BG, relief=tk.FLAT, bd=0,
                                      highlightthickness=0, insertbackground=self.TEXT)
-        _setup_placeholder(self.search_entry, self.search_var, "搜索表格名称...",
-                           self.TEXT, self.TEXT_SEC)
+        self._install_placeholder()
         self.search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4, pady=6)
 
         # Scrollable list
@@ -501,20 +576,20 @@ class MainWindow:
     # ── Project panel (right) ────────────────────────────────────
 
     def _build_project_panel(self, parent):
-        card = ttk.LabelFrame(parent, text="  项目管理  ", bootstyle=PRIMARY)
+        card = self._reg(ttk.LabelFrame(parent, bootstyle=PRIMARY), "panel.projects")
         card.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
 
         # ── Config section ──
-        config_card = ttk.LabelFrame(card, text="项目配置", bootstyle=SECONDARY)
+        config_card = self._reg(ttk.LabelFrame(card, bootstyle=SECONDARY), "section.config")
         config_card.pack(fill=tk.X, padx=14, pady=(10, 4))
 
-        ttk.Label(config_card, text="项目名称", font=FONT).grid(
+        self._reg(ttk.Label(config_card, font=FONT), "field.project_name").grid(
             row=0, column=0, sticky=tk.W, padx=12, pady=(12, 2))
         self.proj_name_var = tk.StringVar()
         ttk.Entry(config_card, textvariable=self.proj_name_var, font=FONT).grid(
             row=1, column=0, sticky=tk.EW, padx=12, pady=(0, 8))
 
-        ttk.Label(config_card, text="表格目录", font=FONT).grid(
+        self._reg(ttk.Label(config_card, font=FONT), "field.source_dir").grid(
             row=2, column=0, sticky=tk.W, padx=12, pady=(2, 2))
         row2 = ttk.Frame(config_card)
         row2.grid(row=3, column=0, sticky=tk.EW, padx=12, pady=(0, 8))
@@ -522,13 +597,13 @@ class MainWindow:
         self.source_dir_var.trace_add("write", self._on_dir_change)
         ttk.Entry(row2, textvariable=self.source_dir_var, font=FONT).pack(
             side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Button(row2, text="浏览", bootstyle=(SECONDARY, OUTLINE),
-                   width=6, command=self._browse_source).pack(side=tk.LEFT, padx=(6, 0))
+        self._reg(ttk.Button(row2, bootstyle=(SECONDARY, OUTLINE), width=6,
+                             command=self._browse_source), "btn.browse").pack(side=tk.LEFT, padx=(6, 0))
 
         # Client output
         row_label = ttk.Frame(config_card)
         row_label.grid(row=4, column=0, sticky=tk.W, padx=12, pady=(2, 2))
-        ttk.Label(row_label, text="客户端输出", font=FONT).pack(side=tk.LEFT)
+        self._reg(ttk.Label(row_label, font=FONT), "field.client_output").pack(side=tk.LEFT)
         self.client_encoding_var = tk.StringVar(value="utf-8")
         self.client_encoding_combo = ttk.Combobox(
             row_label, textvariable=self.client_encoding_var, font=FONT_SMALL,
@@ -543,13 +618,13 @@ class MainWindow:
         self.client_dir_var.trace_add("write", self._on_dir_change)
         ttk.Entry(row5, textvariable=self.client_dir_var, font=FONT).pack(
             side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Button(row5, text="浏览", bootstyle=(SECONDARY, OUTLINE),
-                   width=6, command=self._browse_client).pack(side=tk.LEFT, padx=(6, 0))
+        self._reg(ttk.Button(row5, bootstyle=(SECONDARY, OUTLINE), width=6,
+                             command=self._browse_client), "btn.browse").pack(side=tk.LEFT, padx=(6, 0))
 
         # Server output
         row_label2 = ttk.Frame(config_card)
         row_label2.grid(row=6, column=0, sticky=tk.W, padx=12, pady=(2, 2))
-        ttk.Label(row_label2, text="服务端输出", font=FONT).pack(side=tk.LEFT)
+        self._reg(ttk.Label(row_label2, font=FONT), "field.server_output").pack(side=tk.LEFT)
         self.server_encoding_var = tk.StringVar(value="utf-8")
         self.server_encoding_combo = ttk.Combobox(
             row_label2, textvariable=self.server_encoding_var, font=FONT_SMALL,
@@ -564,28 +639,28 @@ class MainWindow:
         self.server_dir_var.trace_add("write", self._on_dir_change)
         ttk.Entry(row7, textvariable=self.server_dir_var, font=FONT).pack(
             side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Button(row7, text="浏览", bootstyle=(SECONDARY, OUTLINE),
-                   width=6, command=self._browse_server).pack(side=tk.LEFT, padx=(6, 0))
+        self._reg(ttk.Button(row7, bootstyle=(SECONDARY, OUTLINE), width=6,
+                             command=self._browse_server), "btn.browse").pack(side=tk.LEFT, padx=(6, 0))
 
         config_card.columnconfigure(0, weight=1)
 
         # ── Action buttons ──
-        action_card = ttk.LabelFrame(card, text="快捷操作", bootstyle=SECONDARY)
+        action_card = self._reg(ttk.LabelFrame(card, bootstyle=SECONDARY), "section.actions")
         action_card.pack(fill=tk.X, padx=14, pady=4)
 
         btn_frame = ttk.Frame(action_card)
         btn_frame.pack(fill=tk.X, padx=12, pady=10)
-        ttk.Button(btn_frame, text="保存配置", bootstyle=PRIMARY,
-                   command=self._save_project).pack(side=tk.LEFT, padx=3)
-        ttk.Button(btn_frame, text="添加项目", bootstyle=(INFO, OUTLINE),
-                   command=self._add_project).pack(side=tk.LEFT, padx=3)
-        ttk.Button(btn_frame, text="删除项目", bootstyle=(DANGER, OUTLINE),
-                   command=self._delete_project).pack(side=tk.LEFT, padx=3)
-        ttk.Button(btn_frame, text="清除日志", bootstyle=(SECONDARY, OUTLINE),
-                   command=self._clear_log).pack(side=tk.LEFT, padx=3)
+        self._reg(ttk.Button(btn_frame, bootstyle=PRIMARY, command=self._save_project),
+                  "btn.save").pack(side=tk.LEFT, padx=3)
+        self._reg(ttk.Button(btn_frame, bootstyle=(INFO, OUTLINE), command=self._add_project),
+                  "btn.add_project").pack(side=tk.LEFT, padx=3)
+        self._reg(ttk.Button(btn_frame, bootstyle=(DANGER, OUTLINE), command=self._delete_project),
+                  "btn.delete_project").pack(side=tk.LEFT, padx=3)
+        self._reg(ttk.Button(btn_frame, bootstyle=(SECONDARY, OUTLINE), command=self._clear_log),
+                  "btn.clear_log").pack(side=tk.LEFT, padx=3)
 
         # ── Log section ──
-        log_card = ttk.LabelFrame(card, text="日志", bootstyle=SECONDARY)
+        log_card = self._reg(ttk.LabelFrame(card, bootstyle=SECONDARY), "section.log")
         log_card.pack(fill=tk.BOTH, expand=True, padx=14, pady=(4, 10))
 
         log_inner = ttk.Frame(log_card)
@@ -608,7 +683,7 @@ class MainWindow:
         self.progress_bar = ttk.Progressbar(log_card, variable=self.progress_var, maximum=100,
                                             bootstyle=SUCCESS)
         self.progress_bar.pack(fill=tk.X, padx=12, pady=(2, 4))
-        self.progress_label = ttk.Label(log_card, text="就绪", font=FONT_SMALL,
+        self.progress_label = ttk.Label(log_card, text=t("status.ready"), font=FONT_SMALL,
                                         bootstyle=SECONDARY)
         self.progress_label.pack(anchor=tk.W, padx=12, pady=(0, 8))
 
@@ -652,24 +727,24 @@ class MainWindow:
             self._display_project(name)
 
     def _browse_source(self):
-        d = filedialog.askdirectory(title="选择表格目录")
+        d = filedialog.askdirectory(title=t("dlg.choose_source"))
         if d:
             self.source_dir_var.set(d)
 
     def _browse_client(self):
-        d = filedialog.askdirectory(title="选择客户端输出目录")
+        d = filedialog.askdirectory(title=t("dlg.choose_client"))
         if d:
             self.client_dir_var.set(d)
 
     def _browse_server(self):
-        d = filedialog.askdirectory(title="选择服务端输出目录")
+        d = filedialog.askdirectory(title=t("dlg.choose_server"))
         if d:
             self.server_dir_var.set(d)
 
     def _save_project(self):
         name = self.proj_name_var.get().strip()
         if not name:
-            messagebox.showerror("错误", "项目名称不能为空")
+            messagebox.showerror(t("dlg.error"), t("msg.project_name_required"))
             return
         projects = self.projects_data.get("projects", {})
         projects[name] = {
@@ -683,7 +758,7 @@ class MainWindow:
         self.projects_data["active"] = name
         save_projects(self.projects_data)
         self._load_project_config()
-        self._log("配置已保存", "info")
+        self._log(t("log.config_saved"), "info")
 
     def _on_dir_change(self, *args):
         if self._loading:
@@ -727,7 +802,7 @@ class MainWindow:
         name = self.proj_name_var.get().strip()
         projects = self.projects_data.get("projects", {})
         if len(projects) <= 1:
-            messagebox.showerror("错误", "至少保留一个项目")
+            messagebox.showerror(t("dlg.error"), t("msg.keep_one_project"))
             return
         if name in projects:
             del projects[name]
@@ -750,13 +825,18 @@ class MainWindow:
 
     @staticmethod
     def _sort_label(key):
-        """配置里的键 -> 下拉框文案（未知键退回默认的"名称"）。"""
-        return _SORT_KEY2LABEL.get(key, _SORT_KEY2LABEL[DEFAULT_SORT])
+        """排序键 -> 当前语言下的下拉框文案（未知键退回默认的"名称"/"Name"）。"""
+        if key not in SORT_KEYS:
+            key = DEFAULT_SORT
+        return t("sort.time" if key == "time" else "sort.name")
 
     def _current_sort_key(self):
         """当前下拉框选中的排序方式（name / time）。"""
         label = self.sort_var.get() if hasattr(self, 'sort_var') else ""
-        return _SORT_LABEL2KEY.get(label, DEFAULT_SORT)
+        for key in SORT_KEYS:
+            if label == self._sort_label(key):
+                return key
+        return DEFAULT_SORT
 
     def _sort_file_paths(self):
         """按当前排序方式排列：名称 = 升序；时间 = 修改时间新的在前。"""
@@ -775,7 +855,7 @@ class MainWindow:
         self._sort_file_paths()
         self._rebuild_checkbox_list()
         self.list_canvas.yview_moveto(0)
-        self._log(f"排序方式：{self.sort_var.get()}", "info")
+        self._log(t("log.sort_changed", label=self.sort_var.get()), "info")
 
     def _rebuild_checkbox_list(self):
         if not hasattr(self, 'list_frame'):
@@ -785,25 +865,25 @@ class MainWindow:
         self.check_vars = {}
 
         total = len(self.file_paths)
-        self.table_count_label.config(text=f"({total} 个表格)" if total else "")
+        self.table_count_label.config(text=t("list.count", n=total) if total else "")
 
         if not self.file_paths:
             source_dir = self.source_dir_var.get()
             if not source_dir or not os.path.isdir(source_dir):
-                tk.Label(self.list_frame, text="📂  请先配置表格目录",
+                tk.Label(self.list_frame, text=t("list.no_dir"),
                          fg=self.TEXT_SEC, bg=self.CARD, font=FONT).pack(pady=40)
             else:
-                tk.Label(self.list_frame, text="📭  未找到表格文件",
+                tk.Label(self.list_frame, text=t("list.no_files"),
                          fg=self.TEXT_SEC, bg=self.CARD, font=FONT).pack(pady=40)
             return
 
         keyword = self.search_var.get().lower()
-        if keyword == "搜索表格名称...":
+        if keyword == self._placeholder.lower():
             keyword = ""
         visible = [p for p in self.file_paths if not keyword or keyword in os.path.basename(p).lower()]
 
         if not visible:
-            tk.Label(self.list_frame, text="🔍  无匹配结果",
+            tk.Label(self.list_frame, text=t("list.no_match"),
                      fg=self.TEXT_SEC, bg=self.CARD, font=FONT).pack(pady=40)
             return
 
@@ -834,7 +914,7 @@ class MainWindow:
             row.bind("<Enter>", _on_enter)
             row.bind("<Leave>", _on_leave)
 
-        self.table_count_label.config(text=f"({total} 个表格, 匹配 {len(visible)} 个)")
+        self.table_count_label.config(text=t("list.count_match", total=total, n=len(visible)))
 
     def _on_search(self, *args):
         if not hasattr(self, 'list_frame'):
@@ -893,13 +973,13 @@ class MainWindow:
     def _export_selected(self):
         paths = self._get_checked()
         if not paths:
-            messagebox.showinfo("提示", "没有选中任何表")
+            messagebox.showinfo(t("dlg.notice"), t("msg.no_selection"))
             return
         self._do_export(paths)
 
     def _export_all(self):
         if not self.file_paths:
-            messagebox.showinfo("提示", "没有可导出的表")
+            messagebox.showinfo(t("dlg.notice"), t("msg.nothing_to_export"))
             return
         self._do_export(self.file_paths)
 
@@ -928,7 +1008,7 @@ class MainWindow:
         dialog_lines = []
 
         self.progress_var.set(0)
-        self.progress_label.config(text=f"校验中... 0/{total}")
+        self.progress_label.config(text=t("status.checking", i=0, n=total))
 
         for idx, fpath in enumerate(file_paths):
             try:
@@ -948,7 +1028,7 @@ class MainWindow:
                 load_fail += 1
 
             self.progress_var.set((idx + 1) / total * 50)
-            self.progress_label.config(text=f"校验中... {idx + 1}/{total}")
+            self.progress_label.config(text=t("status.checking", i=idx + 1, n=total))
             self.root.update_idletasks()
 
         return loaded, load_fail, syntax_count, dialog_lines
@@ -962,21 +1042,21 @@ class MainWindow:
         弹窗里**直接列出具体错误**（不让人再去日志里翻）：最多列 ``_DIALOG_MAX_ERRORS`` 条，
         超出的用一行"另有 N 处"带过，日志里是全量。
         """
-        self._log(f"发现 {count} 处数据错误，已中断导出（尚未写入任何文件）。", "error")
+        self._log(t("log.data_error_abort", n=count), "error")
 
         lines = list(lines)
         shown = lines[:_DIALOG_MAX_ERRORS]
         body = "\n".join(shown) if shown else ""
         if count > len(shown):
             more = count - len(shown)
-            body += ("\n" if body else "") + f"…… 另有 {more} 处，见日志。"
+            body += ("\n" if body else "") + t("dlg.data_error_more", n=more)
 
-        msg = f"发现 {count} 处数据错误，已中断导出，目标目录没有写入任何文件。\n"
+        msg = t("dlg.data_error_header", n=count) + "\n"
         if body:
             msg += "\n" + body + "\n"
-        msg += "\n请先去源表把这些格子改掉，再重新导出。"
+        msg += "\n" + t("dlg.data_error_footer")
 
-        messagebox.showwarning("数据校验失败", msg)
+        messagebox.showwarning(t("dlg.data_error"), msg)
 
     def _do_export(self, file_paths):
         client_dir = self.client_dir_var.get()
@@ -985,20 +1065,21 @@ class MainWindow:
         server_encoding = self.server_encoding_var.get()
 
         if not client_dir and not server_dir:
-            messagebox.showerror("错误", "请先配置客户端或服务端输出目录")
+            messagebox.showerror(t("dlg.error"), t("msg.no_output_dir"))
             return
         if not file_paths:
             return
 
         total = len(file_paths)
-        self._log(f"开始导出 {total} 个文件... (客户端: {client_encoding}, 服务端: {server_encoding})", "info")
+        self._log(t("log.export_start", n=total, client=client_encoding,
+                    server=server_encoding), "info")
 
         # ── 1/2 预检（只读）──────────────────────────────────────
         loaded, load_fail, syntax_count, error_lines = self._preflight(file_paths)
         if syntax_count:
             self._warn_data_errors(syntax_count, error_lines)
             self.progress_var.set(0)
-            self.progress_label.config(text=f"已中断：{syntax_count} 处数据错误")
+            self.progress_label.config(text=t("status.aborted", n=syntax_count))
             return
 
         # ── 2/2 写文件 ──────────────────────────────────────────
@@ -1022,16 +1103,15 @@ class MainWindow:
                     fail_count += 1
 
             self.progress_var.set(50 + (idx + 1) / total * 50)
-            self.progress_label.config(text=f"导出中... {idx + 1}/{total}")
+            self.progress_label.config(text=t("status.exporting", i=idx + 1, n=total))
             self.root.update_idletasks()
 
-        summary = f"导出完成: 成功 {success_count}, 失败 {fail_count}"
-        self._log(summary, "info")
+        self._log(t("log.export_summary", ok=success_count, fail=fail_count), "info")
         self.progress_var.set(100)
         if fail_count:
-            status = f"完成 ({fail_count} 个失败)"
+            status = t("status.done_failed", n=fail_count)
         else:
-            status = "全部成功 ✓"
+            status = t("status.done")
         self.progress_label.config(text=status)
 
     # ── SVN ──────────────────────────────────────────────────────
@@ -1056,21 +1136,21 @@ class MainWindow:
 
         source_dir = self.source_dir_var.get()
         if not source_dir or not os.path.isdir(source_dir):
-            messagebox.showerror("错误", "请先配置表格目录")
+            messagebox.showerror(t("dlg.error"), t("msg.no_source_dir"))
             return True
 
         svn = find_svn()
         if not svn:
-            messagebox.showerror("错误", "未找到 svn，无法执行该操作")
+            messagebox.showerror(t("dlg.error"), t("msg.no_svn"))
             return True
 
         clean_path = os.path.normpath(source_dir)
         try:
             run_svn_in_terminal(svn, command, clean_path)
         except Exception as e:
-            messagebox.showerror("错误", f"无法启动终端: {e}")
+            messagebox.showerror(t("dlg.error"), t("msg.terminal_failed", err=e))
             return True
-        self._log(f"已在终端执行 svn {command}：{clean_path}")
+        self._log(t("log.svn_terminal", cmd=command, path=clean_path))
         return True
 
     def _svn_update(self):
@@ -1078,15 +1158,15 @@ class MainWindow:
             return
         source_dir = self.source_dir_var.get()
         if not source_dir or not os.path.isdir(source_dir):
-            messagebox.showerror("错误", "请先配置表格目录")
+            messagebox.showerror(t("dlg.error"), t("msg.no_source_dir"))
             return
         clean_path = os.path.normpath(source_dir)
         # /closeonend:0 = 更新完成后保留窗口，方便查看本次更新了哪些文件
         if self._run_tortoise("update", clean_path, ("/closeonend:0",)):
-            self._log(f"已打开 TortoiseSVN 更新窗口：{clean_path}")
+            self._log(t("log.svn_update_opened", path=clean_path))
             return
         # 兜底：机器上没装 TortoiseSVN 时退回命令行
-        self._log("未检测到 TortoiseSVN，改用命令行执行 svn update", "error")
+        self._log(t("log.svn_no_tortoise"), "error")
         subprocess.Popen(["cmd", "/k", f'cd /d "{clean_path}" && svn update'])
 
     def _svn_commit(self):
@@ -1094,16 +1174,16 @@ class MainWindow:
             return
         source_dir = self.source_dir_var.get()
         if not source_dir or not os.path.isdir(source_dir):
-            messagebox.showerror("错误", "请先配置表格目录")
+            messagebox.showerror(t("dlg.error"), t("msg.no_source_dir"))
             return
         clean_path = os.path.normpath(source_dir)
         if self._run_tortoise("commit", clean_path):
-            self._log(f"已打开 TortoiseSVN 提交窗口：{clean_path}")
+            self._log(t("log.svn_commit_opened", path=clean_path))
             return
         try:
             subprocess.Popen(["svn", "commit"], cwd=source_dir)
         except Exception as e:
-            messagebox.showerror("错误", f"无法启动 svn commit: {e}")
+            messagebox.showerror(t("dlg.error"), t("msg.svn_commit_failed", err=e))
 
     # ── Log ──────────────────────────────────────────────────────
 
@@ -1121,21 +1201,32 @@ class MainWindow:
         self.log_text.delete("1.0", tk.END)
         self.log_text.configure(state=tk.DISABLED)
         self.progress_var.set(0)
-        self.progress_label.config(text="就绪")
+        self.progress_label.config(text=t("status.ready"))
         self.root.update_idletasks()
 
+    def _install_placeholder(self):
+        """按当前语言安装搜索框占位符（切语言时会重新调一次）。
 
-def _setup_placeholder(entry, var, placeholder, text_color, placeholder_color):
-    def on_focus_in(e):
-        if var.get() == placeholder:
-            var.set("")
-            entry.config(fg=text_color)
-    def on_focus_out(e):
-        if not var.get():
-            var.set(placeholder)
-            entry.config(fg=placeholder_color)
-    entry.bind("<FocusIn>", on_focus_in)
-    entry.bind("<FocusOut>", on_focus_out)
-    if not var.get():
-        var.set(placeholder)
-        entry.config(fg=placeholder_color)
+        占位符本质是"往输入框里塞了一段灰字"，所以换语言时得先把旧文案认出来替换掉，
+        否则会留下上一种语言的残字；用户真输了内容则不能动。
+        """
+        new_placeholder = t("search.placeholder")
+        entry, var = self.search_entry, self.search_var
+        showing_placeholder = (not var.get()) or var.get() == self._placeholder
+
+        def on_focus_in(e):
+            if var.get() == self._placeholder:
+                var.set("")
+                entry.config(fg=self.TEXT)
+
+        def on_focus_out(e):
+            if not var.get():
+                var.set(self._placeholder)
+                entry.config(fg=self.TEXT_SEC)
+
+        self._placeholder = new_placeholder
+        entry.bind("<FocusIn>", on_focus_in)
+        entry.bind("<FocusOut>", on_focus_out)
+        if showing_placeholder:
+            var.set(new_placeholder)
+            entry.config(fg=self.TEXT_SEC)
