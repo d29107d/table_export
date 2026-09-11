@@ -175,12 +175,19 @@ return {		--[[ cfg_setting.xlsx -> Settings ]]
 
 ### Field types
 
-| Type | Written as | Notes |
-|---|---|---|
-| `number` | a Lua number | `12` | A value that cannot be converted to a number would silently become `nil`, so it is **reported as an error** instead. |
-| `string` | a long string `[[...]]` | `[[Sword]]` | No escaping needed. If the text contains `]`, the writer raises the bracket level (`[[` → `[=[` → `[==[` …) so the result stays valid Lua. |
-| `table` | verbatim | `{{1001, 2}, {1002, 1}}` | You type the Lua table yourself; contents are **syntax-checked**. |
-| `any` | verbatim | `nil` / `true` / `100+50` / `{quality=3}` | Same as `table`, but plain numbers and booleans also pass through. |
+Type the **plain value** into the cell — the exporter adds whatever Lua syntax is
+needed (long-string delimiters, quotes). You never write `[[ ]]` yourself.
+
+| Type | What you type in the cell | What lands in the `.lua` | Notes |
+|---|---|---|---|
+| `number` | `12` | `12` | A value that cannot be converted to a number would silently become `nil`, so it is **reported as an error** instead. |
+| `string` | `Sword` — plain text, **do not** add `[[ ]]` | `[[Sword]]` | The exporter wraps the text in a long string for you, and nothing inside needs escaping. If the text contains `]`, the bracket level is raised (`[[` → `[=[` → `[==[` …) so the result stays valid Lua. |
+| `table` | `{{1001, 2}, {1002, 1}}` | `{{1001, 2}, {1002, 1}}` | You write the Lua table yourself; the contents are **syntax-checked**. |
+| `any` | `nil` / `true` / `100+50` / `{quality=3}` | same as typed | Same as `table`, but plain numbers and booleans also pass through. |
+
+> **`string` cells take plain text only.** If you add `[[ ]]` by hand they become part
+> of the value: the writer still escapes the content correctly, but the exported string
+> literally contains the brackets.
 
 ### Scopes
 
