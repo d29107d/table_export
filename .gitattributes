@@ -1,0 +1,11 @@
+# 统一按 LF 存库、按 LF 检出，避免 Windows(Git for Windows 默认 autocrlf=true)
+# 把源码在磁盘上反复改写成 CRLF，制造无意义的 diff
+* text=auto eol=lf
+
+# 二进制，别做任何转换
+*.xlsx binary
+*.xls  binary
+*.exe  binary
+*.png  binary
+*.ico  binary
+*.jpg  binary
