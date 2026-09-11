@@ -1,3 +1,6 @@
+# -*- coding: utf-8 -*-
+# 上面的声明是必需的：中文 Windows 下 pip 会按 GBK(cp936) 读本文件，
+# 没有这行时下面的中文注释会导致 UnicodeDecodeError 直接中断安装。
 openpyxl>=3.0.0
 # 2.x 才支持 Tk 9：1.x 在 Tk 9 上控件会放大 33%、滚动事件失效，2.0.1 才修。
 # 代码里用到的元组 bootstyle 与 litera/darkly 主题名在 2.x 属「弃用但可用」。

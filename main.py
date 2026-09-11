@@ -11,8 +11,11 @@ from ttkbootstrap.constants import INFO, WARNING, SUCCESS, DANGER, PRIMARY
 from gui.main_window import MainWindow
 from gui.platform_compat import IS_MAC, config_dir
 
-DEFAULT_THEME = "litera"
-DARK_THEME = "darkly"
+#: 首启 / theme.json 缺失时的默认主题。用 ttkbootstrap 2.x 的主题名：1.x 的
+#: litera / darkly 在 2.2 属 legacy 名，能用但会打 DeprecationWarning 且 3.0 会移除。
+DEFAULT_THEME = "bootstrap-light"
+#: 与 DEFAULT_THEME 配对的暗色主题（供切换用）
+DARK_THEME = "bootstrap-dark"
 
 
 #: 主题偏好与 projects.json 放同一个目录（macOS 在 Application Support 下，

@@ -158,12 +158,22 @@ def wheel_units(delta):
     Tk 9 起各平台（含 macOS）都归一化成 ±120 的倍数；Tk 8.6 的 macOS 则是
     每个刻度报 1。用阈值判断，两种量纲都能得到"一格 = 1 单位"。
 
+    **Windows + Tk 8.6 的小 delta 必须原样保留为 0**：那种 delta 来自精密触控板
+    （Windows 把两指滚动报成 <MouseWheel>，delta 不是 120 的倍数），旧代码
+    ``int(-delta/120)`` 会得到 0。若在这里返回 -delta，会被当成"格"而一下滚十几个
+    单位，列表会失控。
+
     注意本项目的 Canvas 没设 ``yscrollincrement``，所以一个 unit 就是画布
     高度的 1/10。
     """
     if abs(delta) >= 120:
-        delta = int(delta / 120)
-    return -int(delta)
+        return -int(delta / 120)
+    if IS_MAC:
+        # Tk 8.6 aqua：一个刻度报 ±1（Tk 9 已归一化，走上面那条）
+        return -int(delta)
+    # Windows Tk 8.6：小 delta 来自精密触控板，维持旧行为，
+    # 否则会把像素位移当成"格"而疯狂滚动
+    return 0
 
 
 def touchpad_dy(delta):

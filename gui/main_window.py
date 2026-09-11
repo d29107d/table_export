@@ -100,6 +100,19 @@ def save_projects(data):
 
 DARK_THEMES = {"darkly", "cyborg", "solar", "superhero", "vapor", "simplex"}
 
+
+def _is_dark_theme(name):
+    """判断主题是否为暗色。
+
+    ``DARK_THEMES`` 是 ttkbootstrap 1.x 的遗留名 —— 2.2 里仍能用，但会打弃用警告，
+    且**不再出现在 ``theme_names()`` 里**。2.x 起主题改用 ``xxx-light`` /
+    ``xxx-dark`` 的命名约定（bootstrap-dark、nord-dark…），这些新暗色主题都不在
+    ``DARK_THEMES`` 中。只按旧集合判断的话，选了新暗色主题 ``self._is_dark`` 仍是
+    False，应用手绘的控件（Canvas / 列表行 / 日志 Text / 搜索框…）不会跟着变暗，
+    和 ttk 控件配色对不上。
+    """
+    return name in DARK_THEMES or name.endswith("-dark")
+
 # ── Fonts ────────────────────────────────────────────────────────
 #
 # 下面是占位值，真正的族名由 _init_fonts() 在 __init__ 里按平台探测后覆盖
@@ -140,7 +153,7 @@ _DIALOG_MAX_ERRORS = 10
 
 
 class MainWindow:
-    def __init__(self, root, initial_theme="litera"):
+    def __init__(self, root, initial_theme="bootstrap-light"):
         self.root = root
         self.current_theme = initial_theme
         self.projects_data = load_projects()
@@ -152,7 +165,7 @@ class MainWindow:
         # 必须在任何 _build_* 之前 —— 那些方法直接引用模块级的 FONT 常量
         _init_fonts(root)
 
-        self._is_dark = initial_theme in DARK_THEMES
+        self._is_dark = _is_dark_theme(initial_theme)
         self._update_theme_colors()
         self.root.configure(bg=self.BG)
 
@@ -297,7 +310,7 @@ class MainWindow:
         try:
             ttk.Style().theme_use(name)
             self.current_theme = name
-            self._is_dark = name in DARK_THEMES
+            self._is_dark = _is_dark_theme(name)
             self._update_theme_colors()
             self._save_theme(name)
             self._apply_theme_colors()
@@ -307,7 +320,12 @@ class MainWindow:
             messagebox.showerror("错误", f"切换主题失败: {e}")
 
     def _toggle_dark_mode(self):
-        target = "darkly" if not self._is_dark else "litera"
+        """在 2.x 的浅色 / 暗色主题间切换。
+
+        刻意不走 legacy 的 litera / darkly：那两个名字在 2.2 会打
+        DeprecationWarning，且官方计划在 3.0 移除。
+        """
+        target = "bootstrap-dark" if not self._is_dark else "bootstrap-light"
         self._switch_theme(target)
 
     def _save_theme(self, name):
