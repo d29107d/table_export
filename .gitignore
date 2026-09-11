@@ -27,6 +27,8 @@ _t_*.py
 .vscode/
 .idea/
 *.swp
+# Excel / WPS 打开文档时生成的临时锁文件
+~$*
 Thumbs.db
 Desktop.ini
 NVIDIA Corporation/
