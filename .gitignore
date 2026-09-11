@@ -31,6 +31,9 @@ Thumbs.db
 Desktop.ini
 NVIDIA Corporation/
 
-# ═══════════ 测试遗留（非代码，确认后可删）═══════════
-C-充值备注.xlsx
-cfg_attr_rule.lua
+# ═══════════ macOS ═══════════
+# 访达打开过目录就会生成；打包出的 .app 一旦被 Finder 选中，也会在 dist/ 下冒出来
+.DS_Store
+._*
+.Spotlight-V100/
+.Trashes/

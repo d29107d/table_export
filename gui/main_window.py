@@ -13,13 +13,19 @@ from ttkbootstrap.constants import PRIMARY, SECONDARY, SUCCESS, INFO, WARNING, D
 from core.excel_reader import list_excel_files, load_excel
 from core.exporter import export_table
 from core.lua_syntax import format_syntax_errors
-
-
-def _get_exe_dir():
-    if getattr(sys, 'frozen', False):
-        return os.path.dirname(sys.executable)
-    else:
-        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from gui.platform_compat import (
+    HAS_TOUCHPAD_SCROLL,
+    IS_MAC,
+    IS_WIN,
+    TOUCHPAD_STEP,
+    bundled_config_dir,
+    config_dir,
+    find_svn,
+    resolve_font_families,
+    run_svn_in_terminal,
+    touchpad_dy,
+    wheel_units,
+)
 
 
 def _find_tortoise_proc():
@@ -27,7 +33,12 @@ def _find_tortoise_proc():
 
     查找顺序：PATH → 注册表（TortoiseSVN 安装时写入的 ``ProcPath``）→ 常见安装目录。
     用它执行 update/commit 就会弹出 TortoiseSVN 自己的窗口，而不是命令行终端。
+
+    非 Windows 直接返回 None —— 省掉 macOS 上那次注定 ImportError 的 ``winreg``。
     """
+    if not IS_WIN:
+        return None
+
     exe = shutil.which("TortoiseProc.exe")
     if exe:
         return exe
@@ -60,16 +71,12 @@ def _find_tortoise_proc():
     return None
 
 
-def _get_bundle_dir():
-    if getattr(sys, 'frozen', False):
-        return os.path.join(sys._MEIPASS, "config")
-    else:
-        return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config")
-
-
-CONFIG_DIR = os.path.join(_get_exe_dir(), "config")
+#: 运行期配置目录。Windows 是 exe 同级的 config/（原样）；macOS 换到
+#: ~/Library/Application Support/ —— .app 内部是会签名的区域，不能往里写。
+CONFIG_DIR = config_dir()
 CONFIG_PATH = os.path.join(CONFIG_DIR, "projects.json")
-FALLBACK_CONFIG = os.path.join(_get_bundle_dir(), "projects.json")
+#: 打包进包里的兜底配置（首次启动当模板）
+FALLBACK_CONFIG = os.path.join(bundled_config_dir(), "projects.json")
 THEME_PATH = os.path.join(CONFIG_DIR, "theme.json")
 
 
@@ -94,12 +101,32 @@ def save_projects(data):
 DARK_THEMES = {"darkly", "cyborg", "solar", "superhero", "vapor", "simplex"}
 
 # ── Fonts ────────────────────────────────────────────────────────
+#
+# 下面是占位值，真正的族名由 _init_fonts() 在 __init__ 里按平台探测后覆盖
+# （探测要先有 Tk root）。字号不需要按平台区分 —— Tk 9 已把 macOS 的 dpi 基准
+# 从 72 对齐到 96，实测 tk scaling = 1.334，与 Windows 一致。
 
 FONT = ("Microsoft YaHei UI", 10)
 FONT_BOLD = ("Microsoft YaHei UI", 10, "bold")
 FONT_TITLE = ("Microsoft YaHei UI", 15, "bold")
 FONT_SMALL = ("Microsoft YaHei UI", 9)
 FONT_MONO = ("Consolas", 10)
+
+
+def _init_fonts(root):
+    """按平台解析字体族名，覆盖上面那组常量。
+
+    Windows 上探测到 ``Microsoft YaHei UI`` / ``Consolas``，结果与写死时一致；
+    macOS 上换成 ``PingFang SC`` / ``Menlo``。写死会在 macOS 上整片静默回退，
+    中文界面变默认字体、日志区失去等宽对齐，而且不报任何错。
+    """
+    global FONT, FONT_BOLD, FONT_TITLE, FONT_SMALL, FONT_MONO
+    ui, mono = resolve_font_families(root)
+    FONT = (ui, 10)
+    FONT_BOLD = (ui, 10, "bold")
+    FONT_TITLE = (ui, 15, "bold")
+    FONT_SMALL = (ui, 9)
+    FONT_MONO = (mono, 10)
 
 #: 表格列表排序方式：(写进配置的键, 下拉框显示文案)
 SORT_OPTIONS = (("name", "名称"), ("time", "时间"))
@@ -119,6 +146,11 @@ class MainWindow:
         self.projects_data = load_projects()
         self.file_paths = []
         self._loading = False
+        #: 触摸板滚动的像素累积器（Windows 用不到，Tk 8.6 也不会写它）
+        self._touchpad_accum = 0.0
+
+        # 必须在任何 _build_* 之前 —— 那些方法直接引用模块级的 FONT 常量
+        _init_fonts(root)
 
         self._is_dark = initial_theme in DARK_THEMES
         self._update_theme_colors()
@@ -353,14 +385,17 @@ class MainWindow:
         ttk.Button(center_group, text="导出全部", bootstyle=PRIMARY,
                    command=self._export_all).pack(side=tk.LEFT, padx=2)
 
-        ttk.Separator(bottom, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=6)
+        # macOS 上没装 svn 时，这两个按钮点了只会弹错误 —— 直接不显示，连分隔线
+        # 一起省掉。Windows 保持原样（那边靠 TortoiseSVN 或系统 svn，检测方式不同）。
+        if IS_WIN or find_svn():
+            ttk.Separator(bottom, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=6)
 
-        svn_group = ttk.Frame(bottom)
-        svn_group.pack(side=tk.LEFT, padx=2, pady=4)
-        ttk.Button(svn_group, text="更新表格", bootstyle=(INFO, OUTLINE),
-                   command=self._svn_update).pack(side=tk.LEFT, padx=2)
-        ttk.Button(svn_group, text="提交表格", bootstyle=(INFO, OUTLINE),
-                   command=self._svn_commit).pack(side=tk.LEFT, padx=2)
+            svn_group = ttk.Frame(bottom)
+            svn_group.pack(side=tk.LEFT, padx=2, pady=4)
+            ttk.Button(svn_group, text="更新表格", bootstyle=(INFO, OUTLINE),
+                       command=self._svn_update).pack(side=tk.LEFT, padx=2)
+            ttk.Button(svn_group, text="提交表格", bootstyle=(INFO, OUTLINE),
+                       command=self._svn_commit).pack(side=tk.LEFT, padx=2)
 
     # ── Table list panel (left) ──────────────────────────────────
 
@@ -793,12 +828,34 @@ class MainWindow:
 
     def _bind_mousewheel(self, event):
         self.list_canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+        if HAS_TOUCHPAD_SCROLL:
+            # Tk 9 起，触摸板 / Magic Mouse / Magic Trackpad 走独立事件，
+            # 不再发 <MouseWheel> —— 不绑这个的话 Mac 上触摸板完全滚不动。
+            self.list_canvas.bind_all("<TouchpadScroll>", self._on_touchpad_scroll)
 
     def _unbind_mousewheel(self, event):
         self.list_canvas.unbind_all("<MouseWheel>")
+        if HAS_TOUCHPAD_SCROLL:
+            self.list_canvas.unbind_all("<TouchpadScroll>")
 
     def _on_mousewheel(self, event):
-        self.list_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        """鼠标滚轮（量纲换算见 platform_compat.wheel_units）。"""
+        self.list_canvas.yview_scroll(wheel_units(event.delta), "units")
+
+    def _on_touchpad_scroll(self, event):
+        """触摸板 / Magic Mouse 的平滑滚动（Tk 9 新增的 <TouchpadScroll>）。
+
+        每个事件只报几像素，所以先累积、凑够一格再滚 —— 否则一次滑动手势会把
+        列表直接甩到最底。
+        """
+        dy = touchpad_dy(event.delta)
+        if not dy:
+            return
+        self._touchpad_accum -= dy
+        steps = int(self._touchpad_accum / TOUCHPAD_STEP)
+        if steps:
+            self._touchpad_accum -= steps * TOUCHPAD_STEP
+            self.list_canvas.yview_scroll(steps, "units")
 
     # ── Selection ────────────────────────────────────────────────
 
@@ -969,7 +1026,38 @@ class MainWindow:
         subprocess.Popen([proc, f"/command:{command}", f"/path:{clean_path}", *extra_args])
         return True
 
+    def _svn_on_mac(self, command):
+        """macOS 分支：在 Terminal 里执行 svn。返回 True 表示已处理。
+
+        用终端而不是静默的 subprocess，是为了对应 Windows 那边 cmd /k 的行为 ——
+        用户能看见进度和输出。没有 svn 时按钮不会显示（见 _build_bottom_bar），
+        这里的检查只是兜底。
+        """
+        if not IS_MAC:
+            return False
+
+        source_dir = self.source_dir_var.get()
+        if not source_dir or not os.path.isdir(source_dir):
+            messagebox.showerror("错误", "请先配置表格目录")
+            return True
+
+        svn = find_svn()
+        if not svn:
+            messagebox.showerror("错误", "未找到 svn，无法执行该操作")
+            return True
+
+        clean_path = os.path.normpath(source_dir)
+        try:
+            run_svn_in_terminal(svn, command, clean_path)
+        except Exception as e:
+            messagebox.showerror("错误", f"无法启动终端: {e}")
+            return True
+        self._log(f"已在终端执行 svn {command}：{clean_path}")
+        return True
+
     def _svn_update(self):
+        if self._svn_on_mac("update"):
+            return
         source_dir = self.source_dir_var.get()
         if not source_dir or not os.path.isdir(source_dir):
             messagebox.showerror("错误", "请先配置表格目录")
@@ -984,6 +1072,8 @@ class MainWindow:
         subprocess.Popen(["cmd", "/k", f'cd /d "{clean_path}" && svn update'])
 
     def _svn_commit(self):
+        if self._svn_on_mac("commit"):
+            return
         source_dir = self.source_dir_var.get()
         if not source_dir or not os.path.isdir(source_dir):
             messagebox.showerror("错误", "请先配置表格目录")

@@ -9,18 +9,15 @@ import ttkbootstrap as ttkb
 from ttkbootstrap.constants import INFO, WARNING, SUCCESS, DANGER, PRIMARY
 
 from gui.main_window import MainWindow
+from gui.platform_compat import IS_MAC, config_dir
 
 DEFAULT_THEME = "litera"
 DARK_THEME = "darkly"
 
 
-def _get_exe_dir():
-    if getattr(sys, 'frozen', False):
-        return os.path.dirname(sys.executable)
-    return os.path.dirname(os.path.abspath(__file__))
-
-
-THEME_PATH = os.path.join(_get_exe_dir(), "config", "theme.json")
+#: 主题偏好与 projects.json 放同一个目录（macOS 在 Application Support 下，
+#: 不再往 .app 内部写 —— 那会破坏签名，换版本时也会丢）
+THEME_PATH = os.path.join(config_dir(), "theme.json")
 
 
 def load_theme():
@@ -37,22 +34,25 @@ def load_theme():
 def _maximize(root):
     """默认最大化打开。
 
-    Windows 用 ``state("zoomed")``；X11 用 ``attributes("-zoomed")``；
-    都不支持时退回"铺满整个屏幕"的 geometry 写法。
+    ``state("zoomed")`` 在三个平台上都是正解：Windows 支持；macOS 的 aqua 从
+    Tk 9 起也支持 —— 实测 macOS 26 + Tk 9.0.3 下 400x300+60+60 会变成
+    1728x1056+0+33，正好铺满工作区并自动避开菜单栏。
+
+    ``attributes("-zoomed")`` 只留给 X11：Tk 9 的 aqua 已经把这个属性整个移除，
+    在 macOS 上调必抛 TclError，所以直接跳过，省一次无谓的异常。
     """
     try:
         root.state("zoomed")
         return
     except tk.TclError:
         pass
-    try:
-        root.attributes("-zoomed", True)
-        return
-    except tk.TclError:
-        pass
-    ws = root.winfo_screenwidth()
-    hs = root.winfo_screenheight()
-    root.geometry(f"{ws}x{hs}+0+0")
+    if not IS_MAC:
+        try:
+            root.attributes("-zoomed", True)
+            return
+        except tk.TclError:
+            pass
+    root.geometry(f"{root.winfo_screenwidth()}x{root.winfo_screenheight()}+0+0")
 
 
 def main():
