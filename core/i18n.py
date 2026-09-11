@@ -118,6 +118,11 @@ _STRINGS = {
     "msg.theme_failed": ("Failed to switch theme: {err}", "切换主题失败: {err}"),
     "msg.no_selection": ("No table selected", "没有选中任何表"),
     "msg.nothing_to_export": ("No table to export", "没有可导出的表"),
+    "msg.internal_error": (
+        "Something went wrong and the action was stopped:\n\n{err}\n\n"
+        "Details were appended to:\n{path}",
+        "程序内部出错，本次操作已中止：\n\n{err}\n\n详细信息已追加到：\n{path}",
+    ),
 
     # ── 数据错误弹窗 ────────────────────────────────────────────
     "dlg.data_error_header": (
@@ -133,6 +138,7 @@ _STRINGS = {
     # ── 日志行 ──────────────────────────────────────────────────
     "log.theme_switched": ("Theme switched to {name}", "主题已切换为 {name}"),
     "log.language_switched": ("Language switched to {name}", "语言已切换为 {name}"),
+    "log.internal_error": ("Internal error: {err}", "内部错误：{err}"),
     "log.sort_changed": ("Sort by: {label}", "排序方式：{label}"),
     "log.config_saved": ("Configuration saved", "配置已保存"),
     "log.export_start": (

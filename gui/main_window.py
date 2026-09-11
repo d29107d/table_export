@@ -3,6 +3,7 @@ import sys
 import json
 import shutil
 import subprocess
+import traceback
 import tkinter as tk
 from tkinter import messagebox, filedialog
 from datetime import datetime
@@ -166,11 +167,16 @@ class MainWindow:
         self._touchpad_accum = 0.0
         #: 需要跟着语言切换的控件：``(widget, i18n key)``
         self._i18n_widgets = []
+        #: 需要跟着语言切换的菜单项：``(menu, entry index, i18n key)``
+        self._i18n_menu_items = []
         #: 搜索框占位符文案（随语言变化，过滤时要拿它比对"是不是空")
         self._placeholder = ""
 
         # 必须在任何 _build_* 之前 —— 那些方法直接引用模块级的 FONT 常量
         _init_fonts(root)
+
+        # 兜底：Tk 回调里抛出的异常不再让窗口"无声消失"
+        root.report_callback_exception = self._on_callback_exception
 
         self._is_dark = _is_dark_theme(initial_theme)
         self._update_theme_colors()
@@ -276,29 +282,32 @@ class MainWindow:
     # ── Menu ─────────────────────────────────────────────────────
 
     def _build_menu(self):
-        """重建整个菜单栏。
+        """构建菜单栏（只在启动时建一次）。
 
-        切语言时也走这里，所以要先销毁旧的菜单栏（tk.Menu 的 label 不能只改一项，
-        整条重建最省事，也不会漏掉子菜单）。
+        ⚠️ 千万别改回"切语言时 destroy 整个菜单栏再重建"：切换语言是从菜单项自己的
+        ``command`` 回调里发起的，而 ``_log()`` 内部会调 ``update_idletasks()``，
+        它能把排队的回调当场拉起来执行 —— 于是销毁菜单栏时菜单仍在使用中
+        （Windows 上就是销毁正在显示的原生菜单），进程会直接闪退。
+        这里把需要跟随语言的项登记进 ``_i18n_menu_items``，切语言只改 label。
         """
         if getattr(self, "_menubar", None) is not None:
-            self._menubar.destroy()
+            return
 
-        self._menubar = tk.Menu(self.root, font=FONT_SMALL, bg=self.CARD, fg=self.TEXT,
+        self._menubar = tk.Menu(self.root, tearoff=0, font=FONT_SMALL, bg=self.CARD, fg=self.TEXT,
                                 activebackground=self.ACCENT, activeforeground="white", borderwidth=0)
         self.root.config(menu=self._menubar)
 
         file_menu = self._submenu()
-        file_menu.add_command(label=t("menu.quit"), command=self.root.quit)
-        self._menubar.add_cascade(label=t("menu.file"), menu=file_menu)
+        self._menu_item(file_menu, "menu.quit", self.root.quit)
+        self._menu_cascade(self._menubar, "menu.file", file_menu)
 
         export_menu = self._submenu()
-        export_menu.add_command(label=t("menu.export_selected"), command=self._export_selected)
-        export_menu.add_command(label=t("menu.export_all"), command=self._export_all)
-        self._menubar.add_cascade(label=t("menu.export"), menu=export_menu)
+        self._menu_item(export_menu, "menu.export_selected", self._export_selected)
+        self._menu_item(export_menu, "menu.export_all", self._export_all)
+        self._menu_cascade(self._menubar, "menu.export", export_menu)
 
         self.theme_menu = self._submenu()
-        self._menubar.add_cascade(label=t("menu.theme"), menu=self.theme_menu)
+        self._menu_cascade(self._menubar, "menu.theme", self.theme_menu)
         self._rebuild_theme_menu()
 
         # 语言菜单：夹在「主题」和「帮助」中间。两个选项用各自的母语写法，
@@ -309,12 +318,23 @@ class MainWindow:
             self.language_menu.add_radiobutton(
                 label=label, value=code, variable=self.language_var,
                 command=lambda c=code: self._switch_language(c))
-        self._menubar.add_cascade(label=t("menu.language"), menu=self.language_menu)
+        self._menu_cascade(self._menubar, "menu.language", self.language_menu)
 
         help_menu = self._submenu()
-        help_menu.add_command(label=t("menu.about"), command=lambda: messagebox.showinfo(
+        self._menu_item(help_menu, "menu.about", lambda: messagebox.showinfo(
             t("about.title"), t("about.body")))
-        self._menubar.add_cascade(label=t("menu.help"), menu=help_menu)
+        self._menu_cascade(self._menubar, "menu.help", help_menu)
+
+    def _menu_item(self, menu, key, command):
+        """在 menu 末尾加一个文案跟随语言的 command 项。"""
+        menu.add_command(label=t(key), command=command)
+        self._i18n_menu_items.append((menu, menu.index(tk.END), key))
+
+    def _menu_cascade(self, parent, key, menu):
+        """在 parent 末尾加一个文案跟随语言的级联项（挂 menu 子菜单）。"""
+        parent.add_cascade(label=t(key), menu=menu)
+        self._i18n_menu_items.append((parent, parent.index(tk.END), key))
+
 
     def _submenu(self):
         """建一个与菜单栏同风格的下拉菜单。"""
@@ -351,9 +371,13 @@ class MainWindow:
             except tk.TclError:
                 pass
 
-        # 菜单栏整个重建：从菜单项回调里触发切换时，正在回调的那个菜单不能当场销毁
-        # （Tk 的菜单 grab 会残留、菜单卡住），所以推到空闲时再建。
-        self.root.after_idle(self._build_menu)
+        # 菜单栏：只改需要翻译的那几项 label，不销毁重建（原因见 _build_menu 的说明：
+        # 这个方法会在菜单项自己的回调里被执行，销毁菜单栏 = 销毁正在使用的原生菜单）。
+        for menu, index, key in self._i18n_menu_items:
+            try:
+                menu.entryconfigure(index, label=t(key))
+            except tk.TclError:
+                pass
 
         # 排序下拉框：值本身是文案，得连选项一起换，再按"键"把选中项对回去
         if hasattr(self, "sort_combo"):
@@ -1187,6 +1211,36 @@ class MainWindow:
             messagebox.showerror(t("dlg.error"), t("msg.svn_commit_failed", err=e))
 
     # ── Log ──────────────────────────────────────────────────────
+
+    def _on_callback_exception(self, exc, val, tb):
+        """Tk 回调里未捕获的异常：写日志 + 落盘 + 弹窗。
+
+        默认行为是把 traceback 打到 stderr，可打包成 windowed 之后 stderr 是 None，
+        表现就是"点了某处窗口直接消失"，事后查不到任何原因。这里保证一定留下痕迹。
+        """
+        detail = "".join(traceback.format_exception(exc, val, tb))
+        summary = "%s: %s" % (exc.__name__, val)
+
+        log_path = os.path.join(CONFIG_DIR, "error.log")
+        try:
+            os.makedirs(CONFIG_DIR, exist_ok=True)
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write("[%s] %s\n%s\n" % (
+                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"), summary, detail))
+        except Exception:
+            pass
+
+        if hasattr(self, "log_text"):
+            try:
+                self._log(t("log.internal_error", err=summary), "error")
+            except Exception:
+                pass
+
+        try:
+            messagebox.showerror(
+                t("dlg.error"), t("msg.internal_error", err=summary, path=log_path))
+        except Exception:
+            pass
 
     def _log(self, msg, tag="info"):
         ts = datetime.now().strftime("%H:%M:%S")
