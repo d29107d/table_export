@@ -45,12 +45,25 @@ def _is_blank_str(value):
 
 
 def _format_string(value):
+    """把文本写成 lua 长字符串字面量 ``[[...]]``。
+
+    长括号里的内容**不做转义**，所以内容里的 ``]`` 会和收尾的 ``]]`` 互相干扰：
+
+    - 内容含 ``]]`` → 提前闭合（``[[a]]b]]`` 只解析出 ``a``）
+    - 内容以 ``]`` 结尾 → 和收尾的 ``]]`` 连成 ``]]]``（``[[尾]]]`` 解析失败）
+
+    因此按需逐层提升 ``=`` 的层数（``[[`` → ``[=[`` → ``[==[`` …），直到开闭
+    括号不会和内容里的 ``]`` 撞上为止。只在内容含 ``]`` 时才会升级层级，
+    普通文本的产物与旧工具完全一致。
+    """
     if value is None:
         return '[[]]'
     s = _crlf(str(value))
-    if ']]' in s:
-        return f'[=[{s}]=]'
-    return f'[[{s}]]'
+    level = 0
+    while ']' + '=' * level + ']' in s or s.endswith(']' + '=' * level):
+        level += 1
+    pad = '=' * level
+    return f'[{pad}[{s}]{pad}]'
 
 
 def _float_literal(value):

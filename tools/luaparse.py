@@ -6,6 +6,9 @@ import re
 #: 所以 key 不能只按 lua 标识符匹配：取"到 '=' 为止、且不含空白与括号引号"的一段。
 _KEY_RE = re.compile(r'([^={}\[\]"\'\s]+?)[ \t]*=(?!=)')
 
+#: 长括号的开头：``[[`` / ``[=[`` / ``[==[`` …… ``=`` 层数不限
+_LONG_OPEN_RE = re.compile(r'\[(=*)\[')
+
 
 class LuaParseError(Exception):
     pass
@@ -36,19 +39,29 @@ def _skip_ws(text, i):
     return i
 
 
+def _long_open_pad(text, i):
+    """``text[i]`` 处若是长括号开头，返回它的 ``=`` 层数（字符串），否则 None。
+
+    lua 的长括号层数不限：``[[`` / ``[=[`` / ``[==[`` …，收尾必须层数一致。
+    写入端（``core/lua_writer._format_string``）在内容含 ``]`` 时会自动升级层数，
+    所以这里不能只认 ``[[`` 和 ``[=[`` 两级。
+    """
+    m = _LONG_OPEN_RE.match(text, i)
+    return m.group(1) if m else None
+
+
 def _read_long_string(text, i):
     # i points at '['
-    if text.startswith('[[', i):
-        j = text.find(']]', i + 2)
-        if j < 0:
-            raise LuaParseError('unterminated [[ string')
-        return text[i + 2:j], j + 2
-    if text.startswith('[=[', i):
-        j = text.find(']=]', i + 3)
-        if j < 0:
-            raise LuaParseError('unterminated [=[ string')
-        return text[i + 3:j], j + 3
-    raise LuaParseError('bad long string at %d' % i)
+    pad = _long_open_pad(text, i)
+    if pad is None:
+        raise LuaParseError('bad long string at %d' % i)
+    opener = '[' + pad + '['
+    closer = ']' + pad + ']'
+    start = i + len(opener)
+    j = text.find(closer, start)
+    if j < 0:
+        raise LuaParseError('unterminated %s string' % opener)
+    return text[start:j], j + len(closer)
 
 
 def _read_quoted(text, i):
@@ -115,7 +128,7 @@ def _parse_value(text, i):
 def _try_key(text, i):
     """判断 i 处是否是 ``key =`` 形式，是则返回 (key, 值起始位置)，否则 (None, i)。"""
     n = len(text)
-    if text.startswith('[[', i) or text.startswith('[=[', i):
+    if _long_open_pad(text, i) is not None:
         k, j = _read_long_string(text, i)
         j = _skip_ws(text, j)
         if j < n and text[j] == ']':
