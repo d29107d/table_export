@@ -339,11 +339,12 @@ class MainWindow:
         self.projects_data["language"] = self.language
         save_projects(self.projects_data)
         self._apply_language()
-        self.root.title(t("app.title"))
         self._log(t("log.language_switched", name=dict(LANGUAGES)[self.language]), "info")
 
     def _apply_language(self):
         """把当前语言应用到所有已登记的控件上（切语言后调用一次即可）。"""
+        self.root.title(t("app.title"))
+
         for widget, key in self._i18n_widgets:
             try:
                 widget.configure(text=t(key))
