@@ -162,8 +162,11 @@ return {		--[[ cfg_item.xlsx -> Item ]]
 | `D` | Field name |
 | `E` | Value |
 
-Row 5 holds the headings. Blank rows are skipped, so you can leave gaps. The
-output is a single flat table:
+Row 5 holds the headings. The field area **ends at the first blank row**: nothing below
+the gap is imported, even when it looks like more fields. If row 6 itself is blank the
+table has no field at all and no file is written. This is the same rule as `base` — an
+empty row 9 means "no file", and the first empty data row ends the table. The output is
+a single flat table:
 
 ```lua
 return {		--[[ cfg_setting.xlsx -> Settings ]]
@@ -230,6 +233,11 @@ what Lua does with duplicate table keys).
 - **An empty data area means "do not export".** If row 9 is empty across the valid
   columns, the whole table is skipped and no file is generated — even if rows 10+
   have data. (Write your first record in row 9.)
+- **A blank row ends a `tiny` table.** The field area stops at the first blank row
+  below row 6, so anything written further down is ignored — it does not matter that
+  the cells still look like fields. A blank row 6 means the sheet has no fields at
+  all and produces no file. This mirrors `base`, which ends at its first empty data
+  row.
 - **Empty cell ≠ blank text.** An empty cell makes the field *disappear from that
   record*. A cell containing only whitespace (or an empty string) is a value, and
   is written according to its type: `number`/`any` → `nil`, `table` → `{}`,
@@ -274,8 +282,8 @@ example/
 |---|---|
 | `01_types_and_scopes.xlsx` | all four field types × all four scopes, two sheets in one workbook |
 | `02_keys_and_layout.xlsx` | `key_count` 0 / 1 / 2, plus a notes sheet and an empty table that are both skipped |
-| `03_tiny_config.xlsx` | the `tiny` layout, including a blank row in the middle |
-| `04_edge_cases.xlsx` | multi-line text, text containing `]]`, text ending with `]`, the empty-cell vs blank-text contrast, booleans, scientific notation, a custom file header/footer |
+| `03_tiny_config.xlsx` | the `tiny` layout — one record per file, no blank row in between |
+| `04_edge_cases.xlsx` | multi-line text, text containing `]]`, text ending with `]`, the empty-cell vs blank-text contrast, booleans, scientific notation, a custom file header/footer, plus the two `tiny` blank-row cases (`EarlyStop` stops at the gap, `NoFirstRow` writes no file) |
 
 Open the workbooks next to their generated `.lua` output — e.g.
 `en/import/01_types_and_scopes.xlsx` → `en/client/cfg_example_item.lua`. The same

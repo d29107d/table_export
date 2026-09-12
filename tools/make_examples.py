@@ -155,6 +155,8 @@ _CONTENT = {
         },
         "tiny": {
             "sheet": "Settings",
+            #: No blank row in the middle: a blank row would end the table and silently
+            #: drop every field below it (that case is shown by EarlyStop in 04 instead).
             "fields": [
                 ("每日免费复活次数", "sc", "number", "free_revive_count", 3),
                 ("复活消耗文本",     "c",  "string", "revive_cost_text", "消耗 %d 元宝复活"),
@@ -162,7 +164,6 @@ _CONTENT = {
                 ("功能开关",         "c",  "any",    "enable",           True),
                 ("额外配置",         "sc", "any",    "extra",            "nil"),
                 ("空串开关",         "c",  "any",    "blank_flag",       " "),
-                SKIP,  # Leave one blank row in the middle: a tiny table skips blank rows and keeps reading
                 ("活动倍率",         "s",  "number", "activity_rate",    1.5e3),
                 ("公告",             "c",  "string", "notice",           "欢迎光临"),
             ],
@@ -198,6 +199,25 @@ _CONTENT = {
                 ("名称", "sc", "string", "name"),
             ],
             "rows": [[1, "甲"], [2, "乙"]],
+        },
+        #: A blank row ends a tiny table: every field below it is not imported.
+        "early_stop": {
+            "sheet": "EarlyStop",
+            "fields": [
+                ("空行之上：导出",     "sc", "number", "above_blank", 1),
+                ("空行之上：也导出",   "c",  "string", "above_text",  "kept"),
+                SKIP,  # 空行 -> 表格到此为止，下面两行不会被读到
+                ("空行之下：不导出",   "c",  "number", "below_blank", 999),
+                ("空行之下：也不导出", "s",  "string", "below_text",  "never written"),
+            ],
+        },
+        #: A tiny table whose row 6 is already blank has no field at all -> no lua file.
+        "no_first_row": {
+            "sheet": "NoFirstRow",
+            "fields": [
+                SKIP,  # 第 6 行为空 -> 整张表不导出，下面这一行永远读不到
+                ("第 6 行为空，整表不导出", "c", "string", "never_read", "x"),
+            ],
         },
     },
     "en": {
@@ -285,6 +305,8 @@ _CONTENT = {
         },
         "tiny": {
             "sheet": "Settings",
+            #: No blank row in the middle: a blank row would end the table and silently
+            #: drop every field below it (that case is shown by EarlyStop in 04 instead).
             "fields": [
                 ("Free revives per day",  "sc", "number", "free_revive_count", 3),
                 ("Revive cost text",      "c",  "string", "revive_cost_text", "Revive costs %d gold"),
@@ -292,7 +314,6 @@ _CONTENT = {
                 ("Feature switch",        "c",  "any",    "enable",           True),
                 ("Extra config",          "sc", "any",    "extra",            "nil"),
                 ("Blank string switch",   "c",  "any",    "blank_flag",       " "),
-                SKIP,  # a blank row in the middle: tiny sheets skip blank rows and keep going
                 ("Event rate",            "s",  "number", "activity_rate",    1.5e3),
                 ("Notice",                "c",  "string", "notice",           "Welcome!"),
             ],
@@ -330,6 +351,25 @@ _CONTENT = {
                 ("Name", "sc", "string", "name"),
             ],
             "rows": [[1, "Alpha"], [2, "Beta"]],
+        },
+        #: A blank row ends a tiny table: every field below it is not imported.
+        "early_stop": {
+            "sheet": "EarlyStop",
+            "fields": [
+                ("Above the blank row: exported",     "sc", "number", "above_blank", 1),
+                ("Above the blank row: exported too", "c",  "string", "above_text",  "kept"),
+                SKIP,  # the blank row -> the table ends here, the two rows below are never read
+                ("Below the blank row: not exported", "c",  "number", "below_blank", 999),
+                ("Below the blank row: not exported either", "s", "string", "below_text", "never written"),
+            ],
+        },
+        #: A tiny table whose row 6 is already blank has no field at all -> no lua file.
+        "no_first_row": {
+            "sheet": "NoFirstRow",
+            "fields": [
+                SKIP,  # a blank row 6 -> the whole table is skipped, the row below is never read
+                ("Row 6 is blank, so the table is not exported", "c", "string", "never_read", "x"),
+            ],
         },
     },
 }
@@ -467,7 +507,7 @@ def build_tiny_config(lang, import_dir):
 
 
 def build_edge_cases(lang, import_dir):
-    """04：各种边界情形。"""
+    """04: assorted edge cases."""
     c = _CONTENT[lang]
     wb = _new_workbook()
 
@@ -480,6 +520,16 @@ def build_edge_cases(lang, import_dir):
     write_base_sheet(wb, lang, custom["sheet"], "cfg_example_custom.lua", 1,
                      custom["cols"], custom["rows"],
                      header="local cfg = {", footer="}\nreturn cfg")
+
+    # A blank row cuts a tiny table short: the two fields below the gap never reach the lua
+    early = c["early_stop"]
+    write_tiny_sheet(wb, lang, early["sheet"], "cfg_example_early_stop.lua", early["fields"])
+
+    # Row 6 already blank => the table has no field at all => no lua file is written.
+    # This is the tiny counterpart of EmptyTable in 02.
+    no_first = c["no_first_row"]
+    write_tiny_sheet(wb, lang, no_first["sheet"], "cfg_example_no_first_row.lua",
+                     no_first["fields"])
 
     wb.save(os.path.join(import_dir, "04_edge_cases.xlsx"))
     wb.close()

@@ -304,15 +304,18 @@ def _parse_base(ws, meta):
 
 
 def _parse_tiny(ws, meta):
+    """Parse a tiny sheet: rows 6+ are one field each, and the field area ends at the first blank row."""
     fields = []
     col_count = max(5, _last_used_column(ws, 5))
 
     for r in range(6, ws.max_row + 1):
         row = [ws.cell(row=r, column=c).value for c in range(1, col_count + 1)]
         if all(v is None for v in row):
-                        # Blank rows are skipped and reading continues (a tiny sheet really can leave
-            # a gap before the next field)
-            continue
+            # The field area ends at the first blank row: everything below the gap is
+            # ignored, even when it looks like more fields. This mirrors a base sheet
+            # ending at its first empty data row, and it keeps stray notes - or a second
+            # draft of the table further down - from leaking into the export.
+            break
 
         config_note = str(row[0]).strip() if row[0] is not None else ""
         scope = str(row[1]).strip().lower() if row[1] is not None else "c"
@@ -332,8 +335,8 @@ def _parse_tiny(ws, meta):
             "row": r,
         })
 
-        # Same rule as base sheets: a tiny sheet with no field at all produces no lua file
-    # (never seen in the current source tree, kept as a safety net)
+    # Same rule as base sheets: a tiny sheet with no field at all produces no lua file.
+    # That is the case when row 6 is blank, and also when no row carries a field name.
     if not fields:
         return None
 
