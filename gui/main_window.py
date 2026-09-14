@@ -203,6 +203,9 @@ class MainWindow:
         self.language = set_language(
             initial_language or self.projects_data.get("language") or DEFAULT_LANGUAGE)
         self.file_paths = []
+        #: Ticked tables, keyed by path: rebuilding the list (typing in the search box)
+        #: must not lose the selection.
+        self.checked_paths = set()
         self._loading = False
                 #: Pixel accumulator for trackpad scrolling (unused on Windows; Tk 8.6 never writes it)
         self._touchpad_accum = 0.0
@@ -922,6 +925,9 @@ class MainWindow:
     def _do_scan(self):
         source_dir = self.source_dir_var.get()
         self.file_paths = list_excel_files(source_dir)
+        # Drop ticks for files that no longer exist (switching project or directory),
+        # keep the rest so a rescan does not lose the selection either.
+        self.checked_paths &= set(self.file_paths)
         self._sort_file_paths()
 
         # ── Sorting ────────────────────────────────────────────
@@ -983,7 +989,11 @@ class MainWindow:
         keyword = self.search_var.get().lower()
         if keyword == self._placeholder.lower():
             keyword = ""
-        visible = [p for p in self.file_paths if not keyword or keyword in os.path.basename(p).lower()]
+        # Match the table name only, never the extension: every file ends with ".xlsx",
+        # so keywords made of common letters (x / l / s) would otherwise match them all.
+        visible = [p for p in self.file_paths
+                   if not keyword
+                   or keyword in os.path.splitext(os.path.basename(p))[0].lower()]
 
         if not visible:
             tk.Label(self.list_frame, text=t("list.no_match"),
@@ -995,7 +1005,10 @@ class MainWindow:
             row = tk.Frame(self.list_frame, bg=bg)
             row.pack(fill=tk.X)
 
-            var = tk.BooleanVar(value=False)
+            var = tk.BooleanVar(value=path in self.checked_paths)
+            # Mirror every change into checked_paths: a row hidden by the search filter
+            # keeps its state, and showing it again restores what the user had ticked.
+            var.trace_add("write", lambda *_a, p=path, v=var: self._remember_check(p, v))
             self.check_vars[path] = var
 
             cb = tk.Checkbutton(row, text="  " + os.path.basename(path), variable=var,
@@ -1018,6 +1031,13 @@ class MainWindow:
             row.bind("<Leave>", _on_leave)
 
         self.table_count_label.config(text=t("list.count_match", total=total, n=len(visible)))
+
+    def _remember_check(self, path, var):
+        """Record a tick / un-tick in the persistent selection set."""
+        if var.get():
+            self.checked_paths.add(path)
+        else:
+            self.checked_paths.discard(path)
 
     def _on_search(self, *args):
         if not hasattr(self, 'list_frame'):
@@ -1070,7 +1090,12 @@ class MainWindow:
             var.set(not var.get())
 
     def _get_checked(self):
-        return [path for path, var in self.check_vars.items() if var.get()]
+        """Ticked tables, in list order.
+
+        Reads the persistent set instead of the currently rendered rows, so filtering
+        the list with the search box cannot silently shrink the export.
+        """
+        return [p for p in self.file_paths if p in self.checked_paths]
 
     # ── Export ───────────────────────────────────────────────────
 
