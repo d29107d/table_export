@@ -12,7 +12,7 @@ import ttkbootstrap as ttk
 from ttkbootstrap.constants import PRIMARY, SECONDARY, SUCCESS, INFO, WARNING, DANGER, OUTLINE
 
 from core.excel_reader import list_excel_files, load_excel
-from core.exporter import export_table
+from core.exporter import ENCODINGS, export_table, normalize_encoding
 from core.i18n import DEFAULT_LANGUAGE, LANGUAGES, set_language, t
 from core.lua_syntax import format_syntax_errors
 from gui.platform_compat import (
@@ -707,7 +707,7 @@ class MainWindow:
         self.client_encoding_var = tk.StringVar(value="utf-8")
         self.client_encoding_combo = ttk.Combobox(
             row_label, textvariable=self.client_encoding_var, font=FONT_SMALL,
-            values=["utf-8", "utf-8-sig", "gb2312", "gbk", "gb18030"],
+            values=list(ENCODINGS),
             state="readonly", width=14)
         self.client_encoding_combo.pack(side=tk.LEFT, padx=(10, 0))
         self.client_encoding_var.trace_add("write", self._on_dir_change)
@@ -728,7 +728,7 @@ class MainWindow:
         self.server_encoding_var = tk.StringVar(value="utf-8")
         self.server_encoding_combo = ttk.Combobox(
             row_label2, textvariable=self.server_encoding_var, font=FONT_SMALL,
-            values=["utf-8", "utf-8-sig", "gb2312", "gbk", "gb18030"],
+            values=list(ENCODINGS),
             state="readonly", width=14)
         self.server_encoding_combo.pack(side=tk.LEFT, padx=(10, 0))
         self.server_encoding_var.trace_add("write", self._on_dir_change)
@@ -811,8 +811,11 @@ class MainWindow:
         self.source_dir_var.set(proj.get("source_dir", ""))
         self.client_dir_var.set(proj.get("client_output_dir", ""))
         self.server_dir_var.set(proj.get("server_output_dir", ""))
-        self.client_encoding_var.set(proj.get("client_encoding", "utf-8"))
-        self.server_encoding_var.set(proj.get("server_encoding", "utf-8"))
+        # Legacy values (gb2312 / gb18030 / utf-8-sig) are folded onto the two
+        # supported encodings, so a config written by an older build still shows a
+        # valid choice instead of leaving the combobox empty.
+        self.client_encoding_var.set(normalize_encoding(proj.get("client_encoding", "utf-8")))
+        self.server_encoding_var.set(normalize_encoding(proj.get("server_encoding", "utf-8")))
         self._loading = False
         if defer_scan:
             self.root.after(50, self._refresh_table_list)
@@ -1168,8 +1171,8 @@ class MainWindow:
     def _do_export(self, file_paths):
         client_dir = self.client_dir_var.get()
         server_dir = self.server_dir_var.get()
-        client_encoding = self.client_encoding_var.get()
-        server_encoding = self.server_encoding_var.get()
+        client_encoding = normalize_encoding(self.client_encoding_var.get())
+        server_encoding = normalize_encoding(self.server_encoding_var.get())
 
         if not client_dir and not server_dir:
             messagebox.showerror(t("dlg.error"), t("msg.no_output_dir"))

@@ -128,6 +128,14 @@ _STRINGS = {
         "程序内部出错，本次操作已中止：\n\n{err}\n\n详细信息已追加到：\n{path}",
     ),
 
+        # ── Export-time errors ────────────────────────────
+    "err.encoding": (
+        "cannot write {filename} as {encoding}: character '{char}' (U+{code:04X}) is not in that charset. "
+        "Switch the output encoding to utf-8 or gbk. The existing file was left untouched.",
+        "无法用 {encoding} 写出 {filename}：字符 '{char}'（U+{code:04X}）不在该字符集内。"
+        "请把输出编码改成 utf-8 或 gbk。原文件没有被修改。",
+    ),
+
         # ── Data error dialog ─────────────────────────────
     "dlg.data_error_header": (
         "Found {n} data error(s). Export aborted; nothing was written to the output directories.",

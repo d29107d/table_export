@@ -31,7 +31,7 @@ Built with Python + Tkinter (ttkbootstrap). Runs on Windows and macOS.
 - **One workbook, many tables** — every sheet is parsed on its own and can produce
   its own `.lua` file.
 - **Client / server split** — a per-field `scope` decides where each column goes;
-  each side is written with its own encoding (UTF-8, UTF-8-BOM, GBK, …).
+  each side is written with its own encoding (UTF-8 or GBK).
 - **Two table shapes** — flat record tables (`base`) and single-record setting
   tables (`tiny`), plus `key_count` for nested output.
 - **Validate before writing** — Lua-valued cells are syntax-checked and numeric
@@ -72,7 +72,7 @@ selected language; the default is **English**.
    in that folder (non-recursive, `~$*` temp files skipped) is scanned; the table
    list on the left shows them.
 2. **Client output** / **Server output** — where generated Lua files go. Either may
-   be left empty; each has its own encoding selector.
+   be left empty; each has its own encoding selector (UTF-8 or GBK).
 3. **Export Selected** / **Export All** — analyse, then write.
 
 While exporting, the progress bar runs in two phases: the first half is the
@@ -344,6 +344,13 @@ table_exporter.spec         PyInstaller build description
 ## Notes
 
 - Generated files are plain text; re-running an export overwrites them.
+- **Writes are all-or-nothing.** The text is encoded in memory and then swapped in
+  with an atomic replace, so a failed write leaves the previous file untouched.
+  If a sheet holds a character the chosen encoding cannot store (for example `·`
+  with GB2312), the export reports the sheet, the output file and the offending
+  character instead of dumping a codec error - and never truncates the file.
+- Only two output encodings are offered: `utf-8` and `gbk`. `gbk` covers
+  Simplified Chinese game data; pick `utf-8` when the pipeline expects it.
 - `tools/compare_export.py` compares two output directories by *structure* rather
   than bytes, which is how the exporter was verified against a legacy tool:
   ```bash
