@@ -80,7 +80,10 @@ read-only pre-check, the second half is the actual writing. If the pre-check fin
 problems the export stops there (see [Data validation](#data-validation)).
 
 Shortcuts: `Ctrl+E` export selected · `Ctrl+Shift+E` export all · `Ctrl+A` select
-all · `Ctrl+Shift+A` invert · `F5` refresh · `Ctrl+F` focus search · `Ctrl+Q` quit.
+all · `Ctrl+Shift+A` invert · `F5` refresh · `Ctrl+F` focus search · `Ctrl+S` save
+config · `Ctrl+Q` quit. Hovering a button shows its shortcut.
+On macOS every one of them except `F5` is bound to `⌘` as well (`⌘E`, `⌘⇧E`, `⌘A`,
+`⌘⇧A`, `⌘F`, `⌘S`, `⌘Q`); the `Ctrl` bindings stay, so either habit works.
 
 The table list can be sorted by **name** or by **modification time**, and filtered
 with the search box.

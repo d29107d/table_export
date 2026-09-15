@@ -20,6 +20,25 @@ from tkinter import font as tkfont
 IS_MAC = sys.platform == 'darwin'
 IS_WIN = sys.platform.startswith('win')
 
+#: How the platform spells a shortcut in the UI: macOS uses the Command glyph (⌘),
+#: Windows spells out "Ctrl". Keep hints in the UI and the real bindings in sync.
+MOD_KEY = '⌘' if IS_MAC else 'Ctrl'
+
+#: How the platform spells Shift in a hint: the glyph on macOS (⌘⇧E), the word on
+#: Windows (Ctrl+Shift+E).
+SHIFT_KEY = '⇧' if IS_MAC else 'Shift'
+
+
+def shortcut(key, shift=False):
+    """Render a shortcut hint.
+
+    ``shortcut('F')`` -> ``⌘F`` on macOS, ``Ctrl+F`` elsewhere;
+    ``shortcut('E', shift=True)`` -> ``⌘⇧E`` / ``Ctrl+Shift+E``.
+    """
+    parts = [MOD_KEY] + ([SHIFT_KEY] if shift else []) + [key]
+    return ''.join(parts) if IS_MAC else '+'.join(parts)
+
+
 #: Since Tk 9, trackpads / precision devices raise their own ``<TouchpadScroll>`` event and no longer send ``<MouseWheel>``
 HAS_TOUCHPAD_SCROLL = tk.TkVersion >= 8.7
 

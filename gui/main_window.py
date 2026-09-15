@@ -25,6 +25,7 @@ from gui.platform_compat import (
     find_svn,
     resolve_font_families,
     run_svn_in_terminal,
+    shortcut,
     touchpad_dy,
     wheel_units,
 )
@@ -215,6 +216,9 @@ class MainWindow:
         self._i18n_menu_items = []
                 #: Search placeholder text (follows the language; used to tell "is it empty" while filtering)
         self._placeholder = ""
+        #: Hover tooltips whose text follows the language: ``(tooltip, i18n key, accel)``
+        #: - the same key that labels the widget, plus the platform's shortcut spelling.
+        self._i18n_tips = []
 
                 # Must happen before any _build_* - those methods reference the module-level FONT constants
         _init_fonts(root)
@@ -344,12 +348,13 @@ class MainWindow:
         self.root.config(menu=self._menubar)
 
         file_menu = self._submenu()
-        self._menu_item(file_menu, "menu.quit", self.root.quit)
+        self._menu_item(file_menu, "menu.quit", self.root.quit, accel=shortcut("Q"))
         self._menu_cascade(self._menubar, "menu.file", file_menu)
 
         export_menu = self._submenu()
-        self._menu_item(export_menu, "menu.export_selected", self._export_selected)
-        self._menu_item(export_menu, "menu.export_all", self._export_all)
+        self._menu_item(export_menu, "menu.export_selected", self._export_selected, accel=shortcut("E"))
+        self._menu_item(export_menu, "menu.export_all", self._export_all,
+                        accel=shortcut("E", shift=True))
         self._menu_cascade(self._menubar, "menu.export", export_menu)
 
         self.theme_menu = self._submenu()
@@ -371,15 +376,20 @@ class MainWindow:
             t("about.title"), t("about.body")))
         self._menu_cascade(self._menubar, "menu.help", help_menu)
 
-    def _menu_item(self, menu, key, command):
-        """Append a command entry to menu whose text follows the language."""
-        menu.add_command(label=t(key), command=command)
-        self._i18n_menu_items.append((menu, menu.index(tk.END), key))
+    def _menu_item(self, menu, key, command, **fmt):
+        """Append a command entry to menu whose text follows the language.
+
+        ``fmt`` is handed to ``t()`` when the label is rendered - it carries the
+        platform's shortcut spelling, because a menu label is also a hint and has to
+        agree with the real binding (⌘Q on macOS, Ctrl+Q elsewhere).
+        """
+        menu.add_command(label=t(key, **fmt), command=command)
+        self._i18n_menu_items.append((menu, menu.index(tk.END), key, fmt))
 
     def _menu_cascade(self, parent, key, menu):
         """Append a cascade entry to parent whose text follows the language (attaching submenu)."""
         parent.add_cascade(label=t(key), menu=menu)
-        self._i18n_menu_items.append((parent, parent.index(tk.END), key))
+        self._i18n_menu_items.append((parent, parent.index(tk.END), key, {}))
 
 
     def _submenu(self):
@@ -400,6 +410,28 @@ class MainWindow:
         widget.configure(text=t(key))
         return widget
 
+    def _tip_text(self, key, accel):
+        """A tooltip line: the widget's label plus its shortcut (``全选  (Ctrl+A)``)."""
+        return "%s  (%s)" % (t(key), accel)
+
+    def _tip(self, widget, key, accel):
+        """Attach a hover tooltip that spells out the widget's shortcut.
+
+        The text is the widget's own label plus the platform's key name (⌘S on macOS,
+        Ctrl+S elsewhere), so a hint always matches the real binding. Registered in
+        ``_i18n_tips`` so a language switch relabels it along with the widget.
+        """
+        tip = ttk.ToolTip(widget, text=self._tip_text(key, accel))
+        self._i18n_tips.append((tip, key, accel))
+        return tip
+
+    def _quick_button(self, parent, key, command, accel, padx=2, **style):
+        """A bottom-bar button plus its tooltip: ``accel`` is the shortcut hint."""
+        button = self._reg(ttk.Button(parent, command=command, **style), key)
+        button.pack(side=tk.LEFT, padx=padx)
+        self._tip(button, key, accel)
+        return button
+
     def _switch_language(self, code):
         """Switch the language: relabel, rebuild menus, persist."""
         self.language = set_language(code)
@@ -418,12 +450,19 @@ class MainWindow:
             except tk.TclError:
                 pass
 
+        # Tooltips repeat a widget's label and add its shortcut, so they follow the language too
+        for tip, key, accel in self._i18n_tips:
+            try:
+                tip.configure(text=self._tip_text(key, accel))
+            except tk.TclError:
+                pass
+
                 # Menu bar: only relabel the entries that need translating, never destroy and rebuild
                 # (see _build_menu: this method can run inside a menu entry's own callback, and
         # destroying the menu bar destroys the native menu currently in use).
-        for menu, index, key in self._i18n_menu_items:
+        for menu, index, key, fmt in self._i18n_menu_items:
             try:
-                menu.entryconfigure(index, label=t(key))
+                menu.entryconfigure(index, label=t(key, **fmt))
             except tk.TclError:
                 pass
 
@@ -512,17 +551,29 @@ class MainWindow:
     # ── Shortcuts ────────────────────────────────────────────────
 
     def _bind_shortcuts(self):
-        self.root.bind("<Control-a>", lambda e: self._select_all())
-        self.root.bind("<Control-A>", lambda e: self._select_all())
-        self.root.bind("<Control-Shift-A>", lambda e: self._deselect_all())
-        self.root.bind("<Control-e>", lambda e: self._export_selected())
-        self.root.bind("<Control-E>", lambda e: self._export_selected())
-        self.root.bind("<Control-Shift-E>", lambda e: self._export_all())
+        # One entry per shortcut: the key with its modifiers, then what it runs. Each is
+        # registered on Control and - on macOS - on Command as well, so a Mac user can
+        # reach for ⌘ while the Windows habit (Ctrl) keeps working. F5 carries no
+        # modifier and is bound once at the end.
+        keys = [
+            ("a", lambda e: self._select_all()),
+            ("A", lambda e: self._select_all()),
+            ("Shift-A", lambda e: self._deselect_all()),
+            ("e", lambda e: self._export_selected()),
+            ("E", lambda e: self._export_selected()),
+            ("Shift-E", lambda e: self._export_all()),
+            ("s", lambda e: self._save_project()),
+            ("S", lambda e: self._save_project()),
+            ("q", lambda e: self.root.quit()),
+            ("Q", lambda e: self.root.quit()),
+            ("f", lambda e: self.search_entry.focus_set()),
+            ("F", lambda e: self.search_entry.focus_set()),
+        ]
+        for key, handler in keys:
+            self.root.bind("<Control-%s>" % key, handler)
+            if IS_MAC:
+                self.root.bind("<Command-%s>" % key, handler)
         self.root.bind("<F5>", lambda e: self._refresh_table_list())
-        self.root.bind("<Control-q>", lambda e: self.root.quit())
-        self.root.bind("<Control-Q>", lambda e: self.root.quit())
-        self.root.bind("<Control-f>", lambda e: self.search_entry.focus_set())
-        self.root.bind("<Control-F>", lambda e: self.search_entry.focus_set())
 
     # ── Layout ───────────────────────────────────────────────────
 
@@ -563,21 +614,21 @@ class MainWindow:
 
         left_group = ttk.Frame(bottom)
         left_group.pack(side=tk.LEFT, padx=2, pady=4)
-        self._reg(ttk.Button(left_group, bootstyle=(SECONDARY, OUTLINE),
-                             command=self._select_all), "btn.select_all").pack(side=tk.LEFT, padx=2)
-        self._reg(ttk.Button(left_group, bootstyle=(SECONDARY, OUTLINE),
-                             command=self._deselect_all), "btn.invert").pack(side=tk.LEFT, padx=2)
-        self._reg(ttk.Button(left_group, bootstyle=(SECONDARY, OUTLINE),
-                             command=self._refresh_table_list), "btn.refresh").pack(side=tk.LEFT, padx=2)
+        self._quick_button(left_group, "btn.select_all", self._select_all, shortcut("A"),
+                           bootstyle=(SECONDARY, OUTLINE))
+        self._quick_button(left_group, "btn.invert", self._deselect_all, shortcut("A", shift=True),
+                           bootstyle=(SECONDARY, OUTLINE))
+        self._quick_button(left_group, "btn.refresh", self._refresh_table_list, "F5",
+                           bootstyle=(SECONDARY, OUTLINE))
 
         ttk.Separator(bottom, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=6)
 
         center_group = ttk.Frame(bottom)
         center_group.pack(side=tk.LEFT, padx=2, pady=4)
-        self._reg(ttk.Button(center_group, bootstyle=SUCCESS,
-                             command=self._export_selected), "btn.export_selected").pack(side=tk.LEFT, padx=2)
-        self._reg(ttk.Button(center_group, bootstyle=PRIMARY,
-                             command=self._export_all), "btn.export_all").pack(side=tk.LEFT, padx=2)
+        self._quick_button(center_group, "btn.export_selected", self._export_selected, shortcut("E"),
+                           bootstyle=SUCCESS)
+        self._quick_button(center_group, "btn.export_all", self._export_all, shortcut("E", shift=True),
+                           bootstyle=PRIMARY)
 
                 # On macOS without svn these two buttons would only pop an error - hide them
                 # completely, separator included. Windows keeps them (it detects svn differently:
@@ -753,8 +804,8 @@ class MainWindow:
 
         btn_frame = ttk.Frame(action_card)
         btn_frame.pack(fill=tk.X, padx=12, pady=10)
-        self._reg(ttk.Button(btn_frame, bootstyle=PRIMARY, command=self._save_project),
-                  "btn.save").pack(side=tk.LEFT, padx=3)
+        self._quick_button(btn_frame, "btn.save", self._save_project, shortcut("S"),
+                           padx=3, bootstyle=PRIMARY)
         self._reg(ttk.Button(btn_frame, bootstyle=(INFO, OUTLINE), command=self._add_project),
                   "btn.add_project").pack(side=tk.LEFT, padx=3)
         self._reg(ttk.Button(btn_frame, bootstyle=(DANGER, OUTLINE), command=self._delete_project),
@@ -1378,7 +1429,7 @@ class MainWindow:
         must first recognise and replace the old text, otherwise leftovers of the
         previous language stay behind; real user input is left untouched.
         """
-        new_placeholder = t("search.placeholder")
+        new_placeholder = t("search.placeholder", accel=shortcut("F"))
         entry, var = self.search_entry, self.search_var
         showing_placeholder = (not var.get()) or var.get() == self._placeholder
 

@@ -40,10 +40,10 @@ _STRINGS = {
 
         # ── Menu bar ─────────────────────────────────────────
     "menu.file": ("File", "文件"),
-    "menu.quit": ("Quit  Ctrl+Q", "退出  Ctrl+Q"),
+    "menu.quit": ("Quit  {accel}", "退出  {accel}"),
     "menu.export": ("Export", "导出"),
-    "menu.export_selected": ("Export Selected  Ctrl+E", "导出选中  Ctrl+E"),
-    "menu.export_all": ("Export All  Ctrl+Shift+E", "导出全部  Ctrl+Shift+E"),
+    "menu.export_selected": ("Export Selected  {accel}", "导出选中  {accel}"),
+    "menu.export_all": ("Export All  {accel}", "导出全部  {accel}"),
     "menu.theme": ("Theme", "主题"),
     "menu.language": ("Language", "语言"),
     "menu.help": ("Help", "帮助"),
@@ -56,7 +56,7 @@ _STRINGS = {
     "label.project": ("Project", "项目"),
 
         # ── Search and sorting ─────────────────────────────
-    "search.placeholder": ("Search tables...", "搜索表格名称..."),
+    "search.placeholder": ("Search tables... ({accel})", "搜索表格名称... ({accel})"),
     "sort.name": ("Name", "名称"),
     "sort.time": ("Time", "时间"),
 
