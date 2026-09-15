@@ -11,6 +11,8 @@ Python + Tkinter（ttkbootstrap）实现，支持 Windows 与 macOS。
 
 ---
 
+![导表管理器](img/readme_cn.jpg)
+
 ## 目录
 
 - [功能](#功能)

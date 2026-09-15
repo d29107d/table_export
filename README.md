@@ -13,6 +13,8 @@ Built with Python + Tkinter (ttkbootstrap). Runs on Windows and macOS.
 
 ---
 
+![Table Exporter](img/readme.jpg)
+
 ## Table of contents
 
 - [Features](#features)
