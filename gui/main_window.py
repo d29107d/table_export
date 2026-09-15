@@ -971,13 +971,18 @@ class MainWindow:
 
     def _refresh_table_list(self):
         self._do_scan()
+        # A refresh starts from a clean slate: the files may have changed on disk, so
+        # whatever was ticked before is dropped instead of being carried into the next
+        # export. (Filtering the list with the search box is a different matter - that
+        # must never touch the selection, which is why it does not come through here.)
+        self.checked_paths.clear()
         self._rebuild_checkbox_list()
 
     def _do_scan(self):
         source_dir = self.source_dir_var.get()
         self.file_paths = list_excel_files(source_dir)
-        # Drop ticks for files that no longer exist (switching project or directory),
-        # keep the rest so a rescan does not lose the selection either.
+        # Keep the selection pointing only at files the directory still has, so a path
+        # that vanished (switching project, or a deleted file) can never survive a scan.
         self.checked_paths &= set(self.file_paths)
         self._sort_file_paths()
 
