@@ -37,13 +37,16 @@ Built with Python + Tkinter (ttkbootstrap). Runs on Windows and macOS.
 - **Two table shapes** — flat record tables (`base`) and single-record setting
   tables (`tiny`), plus `key_count` for nested output.
 - **Validate before writing** — Lua-valued cells are syntax-checked and numeric
-  cells are checked to be really numeric. If *anything* is wrong the export is
-  cancelled and **no file is written at all**, so you never end up with a
-  half-exported directory.
+  cells are checked to be really numeric, and a key used by more than one row is
+  reported as well (that one silently drops data). If *anything* is wrong the
+  export is cancelled and **no file is written at all**, so you never end up with
+  a half-exported directory.
 - **Multi-project** — keep several source/output directory sets and switch between
   them; everything is remembered in `config/projects.json`.
-- **SVN helpers** — *Update tables* / *Commit tables* buttons (a TortoiseSVN window
-  on Windows, Terminal + `svn` on macOS).
+- **SVN helpers** — *Update tables*, *Commit tables*, *Commit client* and *Commit
+  server* buttons: one commit per working copy, the tables you edited and the two
+  output trees the export writes into (a TortoiseSVN window on Windows, Terminal +
+  `svn` on macOS).
 - **Light/dark themes and an English / 中文 UI** — switch them from the menu bar;
   both choices stick.
 
@@ -219,8 +222,10 @@ sheet with nothing to write, no file is produced for it.
 
 The keys are the first `key_count` fields *that have a valid field name* — scope
 filtering does **not** apply to keys, so a key column marked `s` still keys the
-client file. If the same key combination appears twice, the later row wins (that is
-what Lua does with duplicate table keys).
+client file. A key used by two rows would keep only the last of them (that is how
+Lua table assignment behaves), i.e. the earlier rows would vanish from the output,
+so it is treated as a data error and **stops the export** — see
+[Data validation](#data-validation).
 
 ### Rules that surprise people
 
@@ -259,7 +264,14 @@ it — so "passes validation" and "exports as a number" can never disagree.
 Full-width punctuation is the most common data-entry mistake in CJK workbooks, so
 those cases get an explicit message (`'，' is a full-width comma; use ','`).
 
-If any cell fails:
+It also checks the **keys** of every keyed table. Two rows with the same key are
+not a syntax problem, which is exactly what makes them dangerous: the generated
+table keeps only the later row, and the export still reports success. The
+comparison is done on the key *as it is written*, so `1` and `1.0` in a `number`
+column collide, and so do two rows whose key cell is empty (both become `0`). Each
+reported key names the column and every row that would be lost.
+
+If any cell or key fails:
 
 - the export is **cancelled** — not a single file is written, and existing files are
   left untouched;

@@ -99,6 +99,8 @@ _STRINGS = {
     "btn.export_all": ("Export All", "导出全部"),
     "btn.svn_update": ("Update Tables", "更新表格"),
     "btn.svn_commit": ("Commit Tables", "提交表格"),
+    "btn.svn_commit_client": ("Commit Client", "提交前端"),
+    "btn.svn_commit_server": ("Commit Server", "提交后端"),
 
         # ── Dialog titles / directory pickers ──────────
     "dlg.error": ("Error", "错误"),
@@ -116,6 +118,8 @@ _STRINGS = {
         "请先配置客户端或服务端输出目录",
     ),
     "msg.no_source_dir": ("Set the table directory first", "请先配置表格目录"),
+    "msg.no_client_dir": ("Set the client output directory first", "请先配置客户端输出目录"),
+    "msg.no_server_dir": ("Set the server output directory first", "请先配置服务端输出目录"),
     "msg.no_svn": ("svn not found; this action is unavailable", "未找到 svn，无法执行该操作"),
     "msg.terminal_failed": ("Cannot open a terminal: {err}", "无法启动终端: {err}"),
     "msg.svn_commit_failed": ("Cannot start svn commit: {err}", "无法启动 svn commit: {err}"),
@@ -185,6 +189,7 @@ _STRINGS = {
         # ── Lua validation: location and category ───────
     "err.kind.lua": ("Lua syntax error", "Lua 语法错误"),
     "err.kind.number": ("Invalid number", "数字格式错误"),
+    "err.kind.key": ("Duplicate key", "key 重复"),
     "err.where_cell": (
         "cell {ref} (row {row}, column {col})",
         "单元格 {ref}（第 {row} 行 {col} 列）",
@@ -194,6 +199,19 @@ _STRINGS = {
     "err.log_line": (
         "{kind}: {file} / {sheet} / {where} / field {field} -> {error}  |  content: {preview}",
         "{kind}: {file} / {sheet} / {where} / 字段 {field} -> {error} ｜ 内容: {preview}",
+    ),
+
+        # ── Duplicate keys (the row that loses is the one reported) ─
+        # NB: the placeholder must not be called ``key`` - ``t(key, **kw)`` takes the
+        # message key as its first positional parameter, so ``key=`` raises TypeError.
+    "key.duplicate": (
+        "{n} rows share the key {key_literal}; a later row replaces an earlier one, so "
+        "only the last (row {kept}) is written and these rows are dropped: {rows}. Give "
+        "each row a key of its own, or raise key_count when these rows belong to "
+        "different sub-groups.",
+        "{n} 行的 key 都是 {key_literal}；后写的行会覆盖先写的行，所以只有最后一行"
+        "（第 {kept} 行）会被写入，以下行会被丢掉：{rows}。请让每行的 key 唯一；"
+        "如果这些行本该分属不同子组，请把 key 数量调大。",
     ),
 
         # ── Lua validation: syntax errors ────────────────

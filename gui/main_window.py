@@ -640,8 +640,16 @@ class MainWindow:
             svn_group.pack(side=tk.LEFT, padx=2, pady=4)
             self._reg(ttk.Button(svn_group, bootstyle=(INFO, OUTLINE),
                                  command=self._svn_update), "btn.svn_update").pack(side=tk.LEFT, padx=2)
+            # One commit button per working copy: the tables, then the client and the
+            # server output trees the export wrote into.
             self._reg(ttk.Button(svn_group, bootstyle=(INFO, OUTLINE),
                                  command=self._svn_commit), "btn.svn_commit").pack(side=tk.LEFT, padx=2)
+            self._reg(ttk.Button(svn_group, bootstyle=(INFO, OUTLINE),
+                                 command=self._svn_commit_client),
+                      "btn.svn_commit_client").pack(side=tk.LEFT, padx=2)
+            self._reg(ttk.Button(svn_group, bootstyle=(INFO, OUTLINE),
+                                 command=self._svn_commit_server),
+                      "btn.svn_commit_server").pack(side=tk.LEFT, padx=2)
 
     # ── Table list panel (left) ──────────────────────────────────
 
@@ -1315,27 +1323,22 @@ class MainWindow:
         subprocess.Popen([proc, f"/command:{command}", f"/path:{clean_path}", *extra_args])
         return True
 
-    def _svn_on_mac(self, command):
+    def _svn_on_mac(self, command, clean_path):
         """macOS branch: run svn in Terminal. Returns True when it handled the call.
 
         A terminal rather than a silent subprocess, mirroring ``cmd /k`` on Windows:
-        the user can see the progress and the output. The buttons are hidden when svn
-        is missing (see _build_bottom_bar); the check here is only a safety net.
+        the user can see the progress and the output. The path is already checked by
+        the caller; the buttons are hidden when svn is missing (see
+        _build_bottom_bar), so the check below is only a safety net.
         """
         if not IS_MAC:
             return False
-
-        source_dir = self.source_dir_var.get()
-        if not source_dir or not os.path.isdir(source_dir):
-            messagebox.showerror(t("dlg.error"), t("msg.no_source_dir"))
-            return True
 
         svn = find_svn()
         if not svn:
             messagebox.showerror(t("dlg.error"), t("msg.no_svn"))
             return True
 
-        clean_path = os.path.normpath(source_dir)
         try:
             run_svn_in_terminal(svn, command, clean_path)
         except Exception as e:
@@ -1344,37 +1347,55 @@ class MainWindow:
         self._log(t("log.svn_terminal", cmd=command, path=clean_path))
         return True
 
-    def _svn_update(self):
-        if self._svn_on_mac("update"):
-            return
-        source_dir = self.source_dir_var.get()
-        if not source_dir or not os.path.isdir(source_dir):
-            messagebox.showerror(t("dlg.error"), t("msg.no_source_dir"))
-            return
-        clean_path = os.path.normpath(source_dir)
-                    # /closeonend:0 = keep the window open after the update so you can see which files changed
-        if self._run_tortoise("update", clean_path, ("/closeonend:0",)):
-            self._log(t("log.svn_update_opened", path=clean_path))
-            return
-                    # Safety net: fall back to the command line when TortoiseSVN is not installed
-        self._log(t("log.svn_no_tortoise"), "error")
-        subprocess.Popen(["cmd", "/k", f'cd /d "{clean_path}" && svn update'])
+    def _svn_run(self, command, target_dir, missing_key):
+        """Run ``update`` / ``commit`` on one project directory, through TortoiseSVN.
 
-    def _svn_commit(self):
-        if self._svn_on_mac("commit"):
+        The three directories are separate working copies, so each has its own
+        button: the tables you edit, and the two output trees the export writes
+        into. ``missing_key`` is the message shown while that directory has not been
+        configured yet (an empty output directory simply means "this side is not
+        exported", which is not good enough for a commit).
+        """
+        if not target_dir or not os.path.isdir(target_dir):
+            messagebox.showerror(t("dlg.error"), t(missing_key))
             return
-        source_dir = self.source_dir_var.get()
-        if not source_dir or not os.path.isdir(source_dir):
-            messagebox.showerror(t("dlg.error"), t("msg.no_source_dir"))
+        clean_path = os.path.normpath(target_dir)
+
+        if self._svn_on_mac(command, clean_path):
             return
-        clean_path = os.path.normpath(source_dir)
-        if self._run_tortoise("commit", clean_path):
-            self._log(t("log.svn_commit_opened", path=clean_path))
+
+        # /closeonend:0 = keep the window open after the update so you can see which files changed
+        extra_args = ("/closeonend:0",) if command == "update" else ()
+        if self._run_tortoise(command, clean_path, extra_args):
+            key = "log.svn_update_opened" if command == "update" else "log.svn_commit_opened"
+            self._log(t(key, path=clean_path))
+            return
+
+        # Safety net: fall back to the command line when TortoiseSVN is not installed
+        self._log(t("log.svn_no_tortoise"), "error")
+        if command == "update":
+            subprocess.Popen(["cmd", "/k", f'cd /d "{clean_path}" && svn update'])
             return
         try:
-            subprocess.Popen(["svn", "commit"], cwd=source_dir)
+            subprocess.Popen(["svn", "commit"], cwd=clean_path)
         except Exception as e:
             messagebox.showerror(t("dlg.error"), t("msg.svn_commit_failed", err=e))
+
+    def _svn_update(self):
+        """Pull the latest tables into the table directory."""
+        self._svn_run("update", self.source_dir_var.get(), "msg.no_source_dir")
+
+    def _svn_commit(self):
+        """Commit the xlsx tables."""
+        self._svn_run("commit", self.source_dir_var.get(), "msg.no_source_dir")
+
+    def _svn_commit_client(self):
+        """Commit the generated client tree (its own working copy, not the tables')."""
+        self._svn_run("commit", self.client_dir_var.get(), "msg.no_client_dir")
+
+    def _svn_commit_server(self):
+        """Commit the generated server tree (its own working copy, not the tables')."""
+        self._svn_run("commit", self.server_dir_var.get(), "msg.no_server_dir")
 
     # ── Log ──────────────────────────────────────────────────────
 

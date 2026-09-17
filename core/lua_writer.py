@@ -10,6 +10,8 @@ diffing every table against the legacy artifacts found in the target directories
 - key columns are taken from "all valid columns" and are not affected by scope
   filtering (some tables have their key field marked ``s`` (server only), so the
   client does not export that field, yet the client file still uses it as key)
+- a key used by several rows keeps only the last row (Lua table semantics), which
+  is silent data loss - ``duplicate_key_errors`` reports it so the export aborts
 - an empty cell (None) => the field is omitted entirely; an empty string => an
   empty value is written (``nil`` for ``number`` / ``any``, ``{}`` for ``table``)
 - a field name must be a valid Lua identifier, otherwise the whole column is
@@ -22,11 +24,16 @@ diffing every table against the legacy artifacts found in the target directories
 import math
 import re
 
+from .i18n import t
+
 #: Scope values meaning "export to both sides" (the two spellings are synonyms)
 SCOPE_BOTH = ("sc", "cs")
 
 _FIELD_NAME_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
 _NUMERIC_RE = re.compile(r'^-?\d')
+
+#: How many row numbers a duplicate-key message spells out before it elides the rest
+_MAX_ROWS_SHOWN = 8
 
 
 def valid_field_name(name):
@@ -220,6 +227,86 @@ def _build_nested(rows, key_indices, types):
             node = nxt
         node[parts[-1]] = row
     return data
+
+
+def _row_list(rows, limit=_MAX_ROWS_SHOWN):
+    """Row numbers as ``9, 10, 11`` - elided with a trailing ellipsis when there are many."""
+    shown = ", ".join(str(r) for r in rows[:limit])
+    if len(rows) > limit:
+        shown += ", …"
+    return shown
+
+
+def duplicate_key_errors(table_info, first_row):
+    """Keys used by more than one row - each one drops the earlier rows without a word.
+
+    :func:`_build_nested` keeps the rows in a dict, so a row whose key is already
+    taken replaces the earlier one: the earlier row's data never reaches the output
+    while the export still reports success. On the real tables that is not
+    hypothetical - ``Z-装备注灵 / 升级`` writes 26 rows under ``[13][15]`` and only
+    the last of them survives.
+
+    The comparison is on the key **as it is written** (:func:`_format_key`), because
+    that literal is what actually collides in the generated Lua. Two rows whose key
+    cell is empty are duplicates for the same reason (both become ``0`` or ``""``),
+    and so are ``1`` and ``1.0`` in a ``number`` column.
+
+    Returns one entry per duplicated key, shaped like the ``syntax_errors`` the cell
+    validator produces (see ``excel_reader._collect_base_syntax_errors``) so that
+    the pre-flight can report both through a single path:
+
+    - ``row`` / ``col``: the first row that would be lost and the key column
+    - ``field`` / ``type``: the first key field
+    - ``kind``: ``"key"``
+    - ``value``: the key as written, e.g. ``[1]`` (one key) or ``[2][3]`` (nested)
+    - ``error``: text naming every row that collides
+
+    ``first_row`` is the Excel row number of ``data_rows[0]`` (9 for a base sheet).
+    The writer only knows row indexes, so the caller owns the numbering.
+    """
+    key_count = table_info.get("key_count", 0)
+    if key_count <= 0:
+        return []
+
+    field_names = table_info.get("field_names", [])
+    types = table_info.get("types", [])
+    data_rows = table_info.get("data_rows", [])
+
+    # Same key columns as _build_base_lua: the first key_count columns with a valid field name
+    key_indices = _valid_indices(field_names)[:key_count]
+    if not key_indices:
+        return []
+
+    # key literal ("[1][2]") -> the row indexes carrying it, in file order
+    used = {}
+    for i, row in enumerate(data_rows):
+        parts = []
+        for idx in key_indices:
+            type_str = types[idx] if idx < len(types) else "number"
+            value = row[idx] if idx < len(row) else None
+            parts.append(_format_key(value, type_str))
+        used.setdefault("[" + "][".join(parts) + "]", []).append(i)
+
+    errors = []
+    for key, indexes in used.items():
+        if len(indexes) < 2:
+            continue
+        # A later row wins (dict assignment), so everything before the last one is lost
+        dropped = [first_row + i for i in indexes[:-1]]
+        key_col = key_indices[0]
+        errors.append({
+            "row": dropped[0],
+            "col": key_col + 1,
+            "field": field_names[key_col],
+            "type": types[key_col] if key_col < len(types) else "",
+            "kind": "key",
+            "value": key,
+            # "key_literal" rather than "key": t(key, **kw) already has a parameter
+            # called key, so passing key= would raise TypeError
+            "error": t("key.duplicate", n=len(indexes), key_literal=key,
+                       kept=first_row + indexes[-1], rows=_row_list(dropped)),
+        })
+    return errors
 
 
 def _build_base_lua(table_info, scope_filter):

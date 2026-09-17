@@ -465,6 +465,15 @@ def cell_ref(row, col):
         return None
 
 
+#: Error categories an entry may carry (``kind``) -> the i18n key naming it in the log.
+#: ``lua`` is the fallback: an entry without a kind is a Lua syntax error.
+_KIND_KEYS = {
+    'lua': 'err.kind.lua',
+    'number': 'err.kind.number',
+    'key': 'err.kind.key',
+}
+
+
 def format_syntax_errors(table_info, compact=False):
     """Render ``table_info['syntax_errors']`` as lines of text.
 
@@ -473,6 +482,9 @@ def format_syntax_errors(table_info, compact=False):
     error description and a preview of the cell content:
 
     ``Lua syntax error: book.xlsx / sheet / cell B12 (row 12, column B) / field items -> ... | content: ...``
+
+    The category prefix comes from the entry's ``kind`` - a Lua syntax error, an
+    invalid number, or a duplicate key (see ``_KIND_KEYS``).
 
     ``compact=True`` is for the **dialog**: it drops the category prefix and the
     content preview and truncates the description to ``_DIALOG_ERR_WIDTH``, keeping
@@ -510,7 +522,7 @@ def format_syntax_errors(table_info, compact=False):
         preview = str(e.get('value', '')).replace('\r\n', ' ').replace('\n', ' ').strip()
         if len(preview) > 60:
             preview = preview[:60] + '…'
-        kind = t("err.kind.number" if e.get('kind') == 'number' else "err.kind.lua")
+        kind = t(_KIND_KEYS.get(e.get('kind'), 'err.kind.lua'))
 
         lines.append(t("err.log_line", kind=kind, file=source, sheet=sheet, where=where,
                        field=e.get('field'), error=e.get('error'), preview=preview))

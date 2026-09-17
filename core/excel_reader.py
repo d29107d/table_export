@@ -2,7 +2,7 @@ import os
 import openpyxl
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from .lua_writer import valid_field_name
+from .lua_writer import duplicate_key_errors, valid_field_name
 from .lua_syntax import validate_lua_value, validate_number
 
 
@@ -134,6 +134,21 @@ def _check_cell(value, type_str):
     if type_str == "number":
         return validate_number(value)
     return validate_lua_value(text)
+
+
+#: Excel row number of the first data row of a base sheet (rows 1~8 hold the header block)
+_FIRST_DATA_ROW = 9
+
+
+def _collect_key_errors(table_info):
+    """Duplicate keys, reported as data errors so the export aborts instead of dropping rows.
+
+    A keyed table keeps one row per key (the last one wins), so a repeated key means
+    the earlier rows never reach the generated Lua - silently, with no error anywhere.
+    ``lua_writer.duplicate_key_errors`` finds them; here they only have to be given
+    the same shape as a cell error so both travel through the same pre-flight.
+    """
+    return duplicate_key_errors(table_info, _FIRST_DATA_ROW)
 
 
 def _collect_base_syntax_errors(data_rows, types, field_names, first_row=9):
@@ -287,7 +302,7 @@ def _parse_base(ws, meta):
     if not data_rows:
         return None
 
-    return {
+    info = {
         "export_type": "base",
         "sheet_name": ws.title,
         "output_filename": meta["output_filename"],
@@ -299,8 +314,13 @@ def _parse_base(ws, meta):
         "types": types,
         "field_names": field_names,
         "data_rows": data_rows,
-        "syntax_errors": _collect_base_syntax_errors(data_rows, types, field_names),
+        "syntax_errors": _collect_base_syntax_errors(data_rows, types, field_names,
+                                                     first_row=_FIRST_DATA_ROW),
     }
+    # A key used twice drops the earlier row from the output, so it counts as a data
+    # error as well and stops the export before anything is written.
+    info["syntax_errors"].extend(_collect_key_errors(info))
+    return info
 
 
 def _parse_tiny(ws, meta):
