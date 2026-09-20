@@ -102,6 +102,11 @@ _STRINGS = {
     "btn.svn_commit_client": ("Commit Client", "提交前端"),
     "btn.svn_commit_server": ("Commit Server", "提交后端"),
 
+        # ── Tooltips that need to say more than their button label ──
+    # The refresh button also drops whatever is ticked, so its hint spells that out
+    # ({accel} is filled in with the real shortcut, F5).
+    "tip.refresh": ("Refresh ({accel}), clears selection", "刷新({accel}),重置选中"),
+
         # ── Dialog titles / directory pickers ──────────
     "dlg.error": ("Error", "错误"),
     "dlg.notice": ("Notice", "提示"),

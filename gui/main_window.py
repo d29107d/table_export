@@ -351,11 +351,17 @@ class MainWindow:
         self._menu_item(file_menu, "menu.quit", self.root.quit, accel=shortcut("Q"))
         self._menu_cascade(self._menubar, "menu.file", file_menu)
 
-        export_menu = self._submenu()
-        self._menu_item(export_menu, "menu.export_selected", self._export_selected, accel=shortcut("E"))
-        self._menu_item(export_menu, "menu.export_all", self._export_all,
-                        accel=shortcut("E", shift=True))
-        self._menu_cascade(self._menubar, "menu.export", export_menu)
+        # The "Export" menu is gone on purpose (2026-09-18): exporting is done from the
+        # bottom bar, and Ctrl+E / Ctrl+Shift+E still work - _export_selected() and
+        # _export_all() are untouched, so the menu can be restored by re-adding the block
+        # below. (Its i18n keys menu.export / menu.export_selected / menu.export_all are
+        # kept in core/i18n.py for that reason.)
+        #
+        # export_menu = self._submenu()
+        # self._menu_item(export_menu, "menu.export_selected", self._export_selected, accel=shortcut("E"))
+        # self._menu_item(export_menu, "menu.export_all", self._export_all,
+        #                 accel=shortcut("E", shift=True))
+        # self._menu_cascade(self._menubar, "menu.export", export_menu)
 
         self.theme_menu = self._submenu()
         self._menu_cascade(self._menubar, "menu.theme", self.theme_menu)
@@ -410,26 +416,40 @@ class MainWindow:
         widget.configure(text=t(key))
         return widget
 
-    def _tip_text(self, key, accel):
-        """A tooltip line: the widget's label plus its shortcut (``全选  (Ctrl+A)``)."""
+    def _tip_text(self, key, accel, tip_key=None):
+        """A tooltip line.
+
+        By default it repeats the widget's own label plus its shortcut
+        (``Select All  (Ctrl+A)``). ``tip_key`` replaces that with a dedicated i18n string for
+        the widgets whose hint says more than their label can - the refresh button also
+        warns that a refresh drops the ticks. Such a string may embed ``{accel}``.
+        """
+        if tip_key:
+            return t(tip_key, accel=accel)
         return "%s  (%s)" % (t(key), accel)
 
-    def _tip(self, widget, key, accel):
+    def _tip(self, widget, key, accel, tip_key=None):
         """Attach a hover tooltip that spells out the widget's shortcut.
 
         The text is the widget's own label plus the platform's key name (⌘S on macOS,
-        Ctrl+S elsewhere), so a hint always matches the real binding. Registered in
+        Ctrl+S elsewhere), so a hint always matches the real binding - or the dedicated
+        ``tip_key`` string when the widget needs a longer hint. Registered in
         ``_i18n_tips`` so a language switch relabels it along with the widget.
         """
-        tip = ttk.ToolTip(widget, text=self._tip_text(key, accel))
-        self._i18n_tips.append((tip, key, accel))
+        tip = ttk.ToolTip(widget, text=self._tip_text(key, accel, tip_key))
+        self._i18n_tips.append((tip, key, accel, tip_key))
         return tip
 
-    def _quick_button(self, parent, key, command, accel, padx=2, **style):
-        """A bottom-bar button plus its tooltip: ``accel`` is the shortcut hint."""
+    def _quick_button(self, parent, key, command, accel, padx=2, tip_key=None, **style):
+        """A bottom-bar button plus its tooltip: ``accel`` is the shortcut hint.
+
+        ``tip_key`` is only needed when the hint has to say more than the button label.
+        ``padx`` must stay an explicit parameter: routed through ``**style`` it would
+        reach ``ttk.Button`` and raise TclError.
+        """
         button = self._reg(ttk.Button(parent, command=command, **style), key)
         button.pack(side=tk.LEFT, padx=padx)
-        self._tip(button, key, accel)
+        self._tip(button, key, accel, tip_key)
         return button
 
     def _switch_language(self, code):
@@ -451,9 +471,9 @@ class MainWindow:
                 pass
 
         # Tooltips repeat a widget's label and add its shortcut, so they follow the language too
-        for tip, key, accel in self._i18n_tips:
+        for tip, key, accel, tip_key in self._i18n_tips:
             try:
-                tip.configure(text=self._tip_text(key, accel))
+                tip.configure(text=self._tip_text(key, accel, tip_key))
             except tk.TclError:
                 pass
 
@@ -619,7 +639,7 @@ class MainWindow:
         self._quick_button(left_group, "btn.invert", self._deselect_all, shortcut("A", shift=True),
                            bootstyle=(SECONDARY, OUTLINE))
         self._quick_button(left_group, "btn.refresh", self._refresh_table_list, "F5",
-                           bootstyle=(SECONDARY, OUTLINE))
+                           tip_key="tip.refresh", bootstyle=(SECONDARY, OUTLINE))
 
         ttk.Separator(bottom, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=6)
 
@@ -627,8 +647,10 @@ class MainWindow:
         center_group.pack(side=tk.LEFT, padx=2, pady=4)
         self._quick_button(center_group, "btn.export_selected", self._export_selected, shortcut("E"),
                            bootstyle=SUCCESS)
-        self._quick_button(center_group, "btn.export_all", self._export_all, shortcut("E", shift=True),
-                           bootstyle=PRIMARY)
+        # "Export all" button hidden on purpose: the whole-table export stays reachable
+        # from the Export menu and the Shift+E shortcut, and _export_all() is untouched.
+        # self._quick_button(center_group, "btn.export_all", self._export_all, shortcut("E", shift=True),
+        #                    bootstyle=PRIMARY)
 
                 # On macOS without svn these two buttons would only pop an error - hide them
                 # completely, separator included. Windows keeps them (it detects svn differently:
@@ -981,9 +1003,12 @@ class MainWindow:
         self._do_scan()
         # A refresh starts from a clean slate: the files may have changed on disk, so
         # whatever was ticked before is dropped instead of being carried into the next
-        # export. (Filtering the list with the search box is a different matter - that
-        # must never touch the selection, which is why it does not come through here.)
+        # export, and the search box goes back to its placeholder - the filter is part of
+        # what the user is refreshing away. (Filtering the list by *typing* is a different
+        # matter - that must never touch the selection, which is why it does not come
+        # through here.)
         self.checked_paths.clear()
+        self._reset_search()
         self._rebuild_checkbox_list()
 
     def _do_scan(self):
@@ -1108,6 +1133,24 @@ class MainWindow:
             return
         self._rebuild_checkbox_list()
         self.list_canvas.yview_moveto(0)
+
+    def _reset_search(self):
+        """Clear the search box: drop the typed keyword and show the placeholder again.
+
+        Writing the variable fires its ``_on_search`` trace, which rebuilds the list; the
+        caller rebuilds once more afterwards, so the box and the list always agree.
+        """
+        if not hasattr(self, "search_var"):
+            return
+        if self.search_entry.focus_get() is self.search_entry:
+            # Focused box: leave it properly empty. Restoring the grey placeholder here
+            # would make the next keystroke append to it instead of starting the keyword.
+            self.search_var.set("")
+            self.search_entry.configure(fg=self.TEXT)
+            return
+        if self.search_var.get() != self._placeholder:
+            self.search_var.set(self._placeholder)
+            self.search_entry.configure(fg=self.TEXT_SEC)
 
     # ── Mouse wheel ──────────────────────────────────────────────
 
