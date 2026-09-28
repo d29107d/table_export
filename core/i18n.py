@@ -108,8 +108,10 @@ _STRINGS = {
     # ({accel} is filled in with the real shortcut, F5).
     "tip.refresh": ("Refresh ({accel}), clears selection", "刷新({accel}),重置选中"),
     "tip.export_format": (
-        "Output format: lua (a script the game loads) or json (plain data)",
-        "输出格式：lua（游戏加载的脚本）或 json（纯数据）",
+        "Output format: lua (a script the game loads) or json (plain data). The file is "
+        "named after B2's base name plus this extension",
+        "输出格式：lua（游戏加载的脚本）或 json（纯数据）。文件名 = B2 点号前的内容 + "
+        "这个后缀",
     ),
 
         # ── Dialog titles / directory pickers ──────────
