@@ -67,7 +67,7 @@ Built with Python + Tkinter (ttkbootstrap). Runs on Windows and macOS.
 ## Run from source
 
 ```bash
-git clone https://github.com/d29107d/table_export.git
+git clone <repository-url> table_export
 cd table_export
 python -m pip install -r requirements.txt
 python main.py

@@ -58,7 +58,7 @@ Python + Tkinter（ttkbootstrap）实现，支持 Windows 与 macOS。
 ## 从源码运行
 
 ```bash
-git clone https://github.com/d29107d/table_export.git
+git clone <仓库地址> table_export
 cd table_export
 python -m pip install -r requirements.txt
 python main.py

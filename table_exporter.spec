@@ -123,7 +123,7 @@ if IS_MAC:
                  # Finder 里照样显示中文，但避免路径编码带来的麻烦
                  name='table_exporter.app',
                  icon=None,            # 工程里没有 .icns；需要的话先由 .ico 转一份
-                 bundle_identifier='com.cxj.tableexporter',
+                 bundle_identifier='com.san.tableexporter',
                  info_plist={
                      'CFBundleName': '导表管理器',
                      'CFBundleDisplayName': '导表管理器',
