@@ -1285,7 +1285,14 @@ class MainWindow:
 
         for idx, fpath in enumerate(file_paths):
             try:
-                tables = load_excel(fpath)
+                skipped = []
+                tables = load_excel(fpath, skipped)
+                # A sheet that looks like a table but has no usable B2 is a typo, and it
+                # is reported here rather than swallowed: without this line the export
+                # says "0 succeeded, 0 failed" and leaves nothing to act on. It is not
+                # counted as a data error, so it warns instead of blocking the export.
+                for note in skipped:
+                    self._log(f"{os.path.basename(fpath)}: {note}", "error")
                 for info in tables:
                     info["source_path"] = fpath
                                         # Typos (full-width brackets, JSON colons, missing commas...) are reported

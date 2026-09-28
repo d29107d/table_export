@@ -483,7 +483,11 @@ def build_keys_and_layout(lang, import_dir):
                      shop["cols"], shop["rows"])
 
     tips = c["tips"]              # key count 0 -> one anonymous table element per row
-    write_base_sheet(wb, lang, tips["sheet"], "cfg_example_tips.lua", 0,
+    # B2 may end in .lua or .json: the extension is not what picks the format, because
+    # client and server have their own format selectors but share this one cell. Naming
+    # this sheet *.json pins that down - the artifacts are still cfg_example_tips.lua and
+    # cfg_example_tips.json, byte for byte what a *.lua B2 produces.
+    write_base_sheet(wb, lang, tips["sheet"], "cfg_example_tips.json", 0,
                      tips["cols"], tips["rows"])
 
         # The two sheet kinds that get skipped (neither produces a lua file)

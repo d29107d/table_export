@@ -2,6 +2,7 @@ import os
 import openpyxl
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from .i18n import t
 from .lua_writer import duplicate_key_errors, valid_field_name
 from .lua_syntax import validate_lua_value, validate_number
 
@@ -211,27 +212,54 @@ def _cell_value(ws, row, col):
     return ws.cell(row=row, column=col).value
 
 
+#: Suffixes accepted in the ``output_filename`` cell (B2).
+#:
+#: B2 holds the output *file name*, and its extension is **not** what picks the format:
+#: client and server have their own format selectors but share this one cell, so a single
+#: cell cannot name two extensions. Both suffixes are accepted and only the base name is
+#: kept - the extension that matches the format actually chosen is appended later, and
+#: the name is stored normalised to ``.lua`` (:func:`_parse_meta`), which is what every
+#: other part of the tool expects.
+#:
+#: Requiring ``.lua`` alone was a trap once the UI offered json: picking json and then
+#: writing ``cfg_item.json`` here looked right, and dropped the whole sheet without a word.
+_NAME_SUFFIXES = (".lua", ".json")
+
+
+def _sheet_export_type(ws):
+    """``B1`` folded to lower case; "" when the cell is empty."""
+    raw = _cell_value(ws, 1, 2)
+    return str(raw).strip().lower() if raw is not None else ""
+
+
+def _sheet_output_name(ws):
+    """``B2`` stripped; "" when the cell is empty."""
+    raw = _cell_value(ws, 2, 2)
+    return str(raw).strip() if raw is not None else ""
+
+
 def _parse_meta(ws):
     """Parse the table-level metadata.
 
     Returns None for a sheet that is not a configuration table (a notes page, an
     empty sheet, a badly formatted key sheet); the caller skips it. The rule matches
-    the legacy exporter: B1 must be ``base`` / ``tiny`` and B2 a valid ``*.lua`` file
-    name.
+    the legacy exporter: B1 must be ``base`` / ``tiny`` and B2 a file name ending in
+    ``.lua`` or ``.json``.
+
+    The name is stored with a ``.lua`` extension whatever the cell says, so that the
+    parts that consume it (the file writer, ``tools/compare_export.py``) see one shape.
     """
     meta = {}
 
-    raw_type = _cell_value(ws, 1, 2)
-    export_type = str(raw_type).strip().lower() if raw_type is not None else ""
+    export_type = _sheet_export_type(ws)
     if export_type not in ("base", "tiny"):
         return None
     meta["export_type"] = export_type
 
-    raw_name = _cell_value(ws, 2, 2)
-    output_filename = str(raw_name).strip() if raw_name is not None else ""
-    if not output_filename.lower().endswith(".lua"):
+    output_filename = _sheet_output_name(ws)
+    if not output_filename.lower().endswith(_NAME_SUFFIXES):
         return None
-    meta["output_filename"] = output_filename
+    meta["output_filename"] = os.path.splitext(output_filename)[0] + ".lua"
 
     val = _cell_value(ws, 1, 5)
     meta["file_header"] = str(val) if val is not None else ""
@@ -246,6 +274,28 @@ def _parse_meta(ws):
         meta["key_count"] = 0
 
     return meta
+
+
+def skipped_sheet_note(ws):
+    """Why a sheet that *looks* like a config table still produced no output, or None.
+
+    Only one case is reported: ``B1`` says ``base`` / ``tiny`` - the author meant this
+    sheet to be a table - but ``B2`` is not a usable file name. That is always a typo,
+    and it used to disappear without a trace: the log said "0 succeeded, 0 failed" and
+    left nothing to act on.
+
+    A sheet whose ``B1`` is not a table kind at all (a cover page, a notes page) is
+    skipped on purpose and stays silent, and so does a table that parses fine but has
+    no data of its own - neither is a mistake, and reporting them would bury the real
+    problem in noise.
+    """
+    export_type = _sheet_export_type(ws)
+    if export_type not in ("base", "tiny"):
+        return None
+    name = _sheet_output_name(ws)
+    if name.lower().endswith(_NAME_SUFFIXES):
+        return None
+    return t("log.sheet_skipped_name", sheet=ws.title, name=name or t("log.empty_cell"))
 
 
 def _parse_base(ws, meta):
@@ -385,13 +435,24 @@ def list_excel_files(source_dir):
     return result
 
 
-def load_excel(filepath):
+def load_excel(filepath, skipped=None):
+    """Parse every sheet of one workbook into a list of table dicts.
+
+    ``skipped`` is an optional list that collects one note per sheet which claimed to be
+    a config table (``B1`` = ``base`` / ``tiny``) but was dropped over its ``B2`` file
+    name - see :func:`skipped_sheet_note`. The GUI logs those; a sheet that vanishes
+    without a word is impossible to debug from the outside.
+    """
     wb = openpyxl.load_workbook(filepath, data_only=True)
     tables = []
     for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
         table = parse_sheet(ws)
         if table is None:
+            if skipped is not None:
+                note = skipped_sheet_note(ws)
+                if note:
+                    skipped.append(note)
             continue
         table["source_file"] = os.path.basename(filepath)
         tables.append(table)
