@@ -1,4 +1,18 @@
-"""Minimal Lua table parser: turns an exported lua file into nested Python structures so that two exports can be compared structurally, ignoring ordering."""
+"""Minimal Lua parser: turns Lua text into plain Python structures.
+
+Two callers, one grammar:
+
+- ``tools/compare_export.py`` parses a whole generated lua file so that two exports
+  can be compared structurally, ignoring ordering
+- ``core/json_writer.py`` parses the hand-written Lua sitting in a ``table`` / ``any``
+  cell (``{10000, "Revive Envoy", 1503}``) so the JSON export can carry it as native
+  JSON instead of a string of Lua source
+
+Anything that is not a plain literal - an expression such as ``100+50``, an unbalanced
+brace, a function call - is deliberately *not* an error: ``_coerce`` hands the raw text
+back as a string, and :func:`parse_value` reports trailing content so the caller can
+fall back to the source text rather than guessing at a meaning.
+"""
 
 import re
 
@@ -94,6 +108,17 @@ def _read_token(text, i):
     return text[start:i].strip(), i
 
 
+class Raw(str):
+    """A token ``_coerce`` could not reduce to a number, a boolean or nil, kept as text.
+
+    A ``str`` subclass rather than a plain ``str`` so a caller can tell the two apart:
+    ``"abc"`` in the source really is the string ``abc``, while a bare ``abc`` is a
+    token that only *looks* like one (in Lua it would be a variable reference), and
+    ``100+50`` is an expression. Comparison still behaves like ``str``, so structural
+    comparison in ``tools/compare_export.py`` is unaffected.
+    """
+
+
 def _coerce(tok):
     if tok == 'nil':
         return None
@@ -109,7 +134,7 @@ def _coerce(tok):
         return float(tok)
     except ValueError:
         pass
-    return tok
+    return Raw(tok)
 
 
 def _parse_value(text, i):
@@ -226,5 +251,42 @@ def parse_lua(text):
     i = text.find('return')
     if i < 0:
         raise LuaParseError('no return')
-    i += len('return')
-    return _parse_value(text, i)[0]
+    value, _ = _parse_value(text, i + len('return'))
+    if isinstance(value, Raw):
+        # A custom file header/footer wraps the table in a local alias
+        # (``local cfg = { ... } return cfg``), so ``return`` names a variable rather
+        # than carrying the table. Follow the alias; without this a whole class of
+        # tables parsed into the bare word ``cfg`` and every comparison against them
+        # came out meaninglessly unequal.
+        value = _parse_alias(text, value, before=i)
+    return value
+
+
+def _parse_alias(text, name, before):
+    """Resolve ``local <name> = <value>`` for a ``return <name>`` at ``before``."""
+    match = re.search(r'\blocal\s+' + re.escape(str(name)) + r'\s*=\s*', text[:before])
+    if match is None:
+        raise LuaParseError('`return %s` with no `local %s =` in front of it' % (name, name))
+    return _parse_value(text, match.end())[0]
+
+
+def parse_value(text):
+    """Parse ``text`` as exactly one Lua value and return the Python equivalent.
+
+    Used by the JSON export on a hand-written cell. The whole text must be consumed:
+    ``{1, 2} + extra`` is rejected rather than silently read as ``{1, 2}``, because the
+    caller's fallback - keep the cell's source text as a string - is only safe while
+    "parsed" really means "this cell is nothing but a literal".
+
+    Expression-shaped input does **not** raise: ``100+50`` parses into the string
+    ``"100+50"`` (see ``_coerce``), which is the same fallback the caller would have
+    chosen anyway. Raises :class:`LuaParseError` for unbalanced or truncated input.
+    """
+    text = strip_bom(text).strip()
+    if not text:
+        raise LuaParseError('empty')
+    value, i = _parse_value(text, 0)
+    rest = text[i:].strip()
+    if rest:
+        raise LuaParseError('trailing content after the value: %r' % rest[:20])
+    return value

@@ -32,13 +32,12 @@ import glob
 import json
 import collections
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from concurrent.futures import ThreadPoolExecutor
 from core.excel_reader import load_excel, list_excel_files
 from core.lua_writer import generate_lua
-from luaparse import parse_lua, Dup
+from core.luaparse import parse_lua, Dup
 
 #: Machine-local path file (not committed): {"src": ..., "cli": ..., "srv": ...}
 LOCAL_PATHS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),

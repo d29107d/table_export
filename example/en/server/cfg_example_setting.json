@@ -1,0 +1,9 @@
+{
+	"free_revive_count": 3,
+	"entrance_npc": [
+		10000,
+		"Revive Envoy",
+		1503
+	],
+	"activity_rate": 1500
+}

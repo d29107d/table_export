@@ -1,0 +1,6 @@
+{
+	"free_revive_count": 3,
+	"revive_cost_text": "Revive costs %d gold",
+	"enable": true,
+	"notice": "Welcome!"
+}

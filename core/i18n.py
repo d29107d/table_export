@@ -73,6 +73,7 @@ _STRINGS = {
     "field.source_dir": ("Table directory", "表格目录"),
     "field.client_output": ("Client output", "客户端输出"),
     "field.server_output": ("Server output", "服务端输出"),
+    "field.format": ("Format", "格式"),
     "btn.browse": ("Browse", "浏览"),
 
         # ── Quick actions ───────────────────────────────────
@@ -106,6 +107,10 @@ _STRINGS = {
     # The refresh button also drops whatever is ticked, so its hint spells that out
     # ({accel} is filled in with the real shortcut, F5).
     "tip.refresh": ("Refresh ({accel}), clears selection", "刷新({accel}),重置选中"),
+    "tip.export_format": (
+        "Output format: lua (a script the game loads) or json (plain data)",
+        "输出格式：lua（游戏加载的脚本）或 json（纯数据）",
+    ),
 
         # ── Dialog titles / directory pickers ──────────
     "dlg.error": ("Error", "错误"),

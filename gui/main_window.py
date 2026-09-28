@@ -12,7 +12,7 @@ import ttkbootstrap as ttk
 from ttkbootstrap.constants import PRIMARY, SECONDARY, SUCCESS, INFO, WARNING, DANGER, OUTLINE
 
 from core.excel_reader import list_excel_files, load_excel
-from core.exporter import ENCODINGS, export_table, normalize_encoding
+from core.exporter import ENCODINGS, FORMATS, export_table, normalize_encoding, normalize_format
 from core.i18n import DEFAULT_LANGUAGE, LANGUAGES, set_language, t
 from core.lua_syntax import format_syntax_errors
 from gui.platform_compat import (
@@ -452,6 +452,23 @@ class MainWindow:
         self._tip(button, key, accel, tip_key)
         return button
 
+    def _make_format_combo(self, parent):
+        """The lua/json dropdown that follows the encoding one, plus its tooltip.
+
+        Both output rows carry one, so it is built in a single place: the value is what
+        the export pipeline branches on, and the two sides should not be able to drift
+        apart on how it is built. Width 6 fits the longest entry ("json") with room for
+        the arrow. The tooltip is a dedicated string because the label-less dropdown has
+        no text of its own for ``_tip_text`` to repeat.
+        """
+        var = tk.StringVar(value=FORMATS[0])
+        combo = ttk.Combobox(parent, textvariable=var, font=FONT_SMALL,
+                             values=list(FORMATS), state="readonly", width=6)
+        combo.pack(side=tk.LEFT, padx=(6, 0))
+        self._tip(combo, "field.format", "", "tip.export_format")
+        var.trace_add("write", self._on_dir_change)
+        return var, combo
+
     def _switch_language(self, code):
         """Switch the language: relabel, rebuild menus, persist."""
         self.language = set_language(code)
@@ -796,6 +813,9 @@ class MainWindow:
         self.client_encoding_combo.pack(side=tk.LEFT, padx=(10, 0))
         self.client_encoding_var.trace_add("write", self._on_dir_change)
 
+        # The output format for this side, right after its encoding
+        self.client_format_var, self.client_format_combo = self._make_format_combo(row_label)
+
         row5 = ttk.Frame(config_card)
         row5.grid(row=5, column=0, sticky=tk.EW, padx=12, pady=(0, 8))
         self.client_dir_var = tk.StringVar()
@@ -816,6 +836,9 @@ class MainWindow:
             state="readonly", width=14)
         self.server_encoding_combo.pack(side=tk.LEFT, padx=(10, 0))
         self.server_encoding_var.trace_add("write", self._on_dir_change)
+
+        # The output format for this side, right after its encoding
+        self.server_format_var, self.server_format_combo = self._make_format_combo(row_label2)
 
         row7 = ttk.Frame(config_card)
         row7.grid(row=7, column=0, sticky=tk.EW, padx=12, pady=(0, 12))
@@ -900,6 +923,11 @@ class MainWindow:
         # valid choice instead of leaving the combobox empty.
         self.client_encoding_var.set(normalize_encoding(proj.get("client_encoding", "utf-8")))
         self.server_encoding_var.set(normalize_encoding(proj.get("server_encoding", "utf-8")))
+        # Same treatment for the format: a config written before the dropdown existed
+        # has no key at all, and a hand-edited one may hold anything - both have to
+        # land on a valid entry instead of leaving the combobox empty.
+        self.client_format_var.set(normalize_format(proj.get("client_format", FORMATS[0])))
+        self.server_format_var.set(normalize_format(proj.get("server_format", FORMATS[0])))
         self._loading = False
         if defer_scan:
             self.root.after(50, self._refresh_table_list)
@@ -928,19 +956,30 @@ class MainWindow:
         if d:
             self.server_dir_var.set(d)
 
+    def _project_payload(self):
+        """Everything a project stores, read off the form.
+
+        One place rather than three: save, auto-save and the display all have to agree
+        on the key list, and a field added to only some of them would be silently
+        dropped on the next save.
+        """
+        return {
+            "source_dir": self.source_dir_var.get(),
+            "client_output_dir": self.client_dir_var.get(),
+            "server_output_dir": self.server_dir_var.get(),
+            "client_encoding": self.client_encoding_var.get(),
+            "server_encoding": self.server_encoding_var.get(),
+            "client_format": self.client_format_var.get(),
+            "server_format": self.server_format_var.get(),
+        }
+
     def _save_project(self):
         name = self.proj_name_var.get().strip()
         if not name:
             messagebox.showerror(t("dlg.error"), t("msg.project_name_required"))
             return
         projects = self.projects_data.get("projects", {})
-        projects[name] = {
-            "source_dir": self.source_dir_var.get(),
-            "client_output_dir": self.client_dir_var.get(),
-            "server_output_dir": self.server_dir_var.get(),
-            "client_encoding": self.client_encoding_var.get(),
-            "server_encoding": self.server_encoding_var.get(),
-        }
+        projects[name] = self._project_payload()
         self.projects_data["projects"] = projects
         self.projects_data["active"] = name
         save_projects(self.projects_data)
@@ -959,13 +998,7 @@ class MainWindow:
         projects = self.projects_data.get("projects", {})
         if name not in projects:
             return
-        projects[name] = {
-            "source_dir": self.source_dir_var.get(),
-            "client_output_dir": self.client_dir_var.get(),
-            "server_output_dir": self.server_dir_var.get(),
-            "client_encoding": self.client_encoding_var.get(),
-            "server_encoding": self.server_encoding_var.get(),
-        }
+        projects[name] = self._project_payload()
         save_projects(self.projects_data)
 
     def _add_project(self):
@@ -979,7 +1012,8 @@ class MainWindow:
                 i += 1
             name = f"{name}_{i}"
         projects[name] = {"source_dir": "", "client_output_dir": "", "server_output_dir": "",
-                          "client_encoding": "utf-8", "server_encoding": "utf-8"}
+                          "client_encoding": "utf-8", "server_encoding": "utf-8",
+                          "client_format": FORMATS[0], "server_format": FORMATS[0]}
         self.projects_data["projects"] = projects
         save_projects(self.projects_data)
         self._load_project_config()
@@ -1305,6 +1339,8 @@ class MainWindow:
         server_dir = self.server_dir_var.get()
         client_encoding = normalize_encoding(self.client_encoding_var.get())
         server_encoding = normalize_encoding(self.server_encoding_var.get())
+        client_format = normalize_format(self.client_format_var.get())
+        server_format = normalize_format(self.server_format_var.get())
 
         if not client_dir and not server_dir:
             messagebox.showerror(t("dlg.error"), t("msg.no_output_dir"))
@@ -1313,8 +1349,11 @@ class MainWindow:
             return
 
         total = len(file_paths)
-        self._log(t("log.export_start", n=total, client=client_encoding,
-                    server=server_encoding), "info")
+        # Encoding and format are both per side, so the log line shows them as a pair
+        # ("utf-8/lua"); the message text itself stays as it is.
+        self._log(t("log.export_start", n=total,
+                    client=f"{client_encoding}/{client_format}",
+                    server=f"{server_encoding}/{server_format}"), "info")
 
                 # ── 1/2 pre-flight (read only) ─────────────
         loaded, load_fail, syntax_count, error_lines = self._preflight(file_paths)
@@ -1333,7 +1372,8 @@ class MainWindow:
                 try:
                     for info in tables:
                         result = export_table(fpath, info, client_dir, server_dir,
-                                             client_encoding, server_encoding)
+                                             client_encoding, server_encoding,
+                                             client_format, server_format)
                         for msg in result.success:
                             self._log(msg, "success")
                             success_count += 1

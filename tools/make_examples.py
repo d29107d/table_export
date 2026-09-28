@@ -17,12 +17,15 @@ Two jobs:
 1. write the example xlsx files into ``example/<lang>/import/`` (covering every
    table layout and field type)
 2. export them with the real export logic into ``example/<lang>/client/`` and
-   ``example/<lang>/server/``
+   ``example/<lang>/server/`` - once as lua and once as json, so both formats have
+   a reference copy next to each other
 
 The example workbooks *are* the format specification - for "what is this row or
 column for", this script is more accurate than the documentation. The two languages
 differ only in human-facing text (sheet comments, cell data, tiny table headers);
 table structure and field names are identical, and so is the exported lua structure.
+For the same reason the ``.json`` twins are generated here rather than hand-written:
+they are only meaningful as long as they come from the same parse as the ``.lua``.
 """
 
 import os
@@ -33,7 +36,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import openpyxl
 
 from core.excel_reader import list_excel_files, load_excel
-from core.exporter import export_table
+from core.exporter import FORMATS, export_table
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -559,20 +562,31 @@ def clean_outputs(client_dir, server_dir):
     for d in (client_dir, server_dir):
         os.makedirs(d, exist_ok=True)
         for name in os.listdir(d):
-            if name.startswith(_OUTPUT_PREFIX) and name.endswith(".lua"):
+            if name.startswith(_OUTPUT_PREFIX) and name.endswith((".lua", ".json")):
                 os.remove(os.path.join(d, name))
 
 
 def export_examples(import_dir, client_dir, server_dir):
-    exported, failed = 0, 0
+    """按每种格式各导一遍，产物同目录同基名（``cfg_x.lua`` 与 ``cfg_x.json`` 并排）。
+
+    两种格式都进 example/，是为了让「示例即规范」这条约定同样覆盖 json：谁改动了
+    任一种输出，diff 里都会立刻看到，不用等到消费方发现字段对不上。
+    每份工作簿只读一次，两种格式复用同一份解析结果。
+    """
+    tables = []
     for path in sorted(list_excel_files(import_dir)):
-        for info in load_excel(path):
-            result = export_table(path, info, client_dir, server_dir, ENCODING, ENCODING)
+        tables.extend((path, info) for info in load_excel(path))
+
+    exported, failed = 0, 0
+    for fmt in FORMATS:
+        print("  [%s]" % fmt)
+        for path, info in tables:
+            result = export_table(path, info, client_dir, server_dir, ENCODING, ENCODING, fmt, fmt)
             for msg in result.success:
-                print("  " + msg)
+                print("    " + msg)
                 exported += 1
             for msg in result.failed:
-                print("  FAILED " + msg)
+                print("    FAILED " + msg)
                 failed += 1
     return exported, failed
 

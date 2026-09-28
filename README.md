@@ -2,12 +2,13 @@
 
 **English** · [中文](README.zh-CN.md)
 
-A small cross-platform desktop app that turns Excel workbooks (`.xlsx`) into Lua
-config tables.
+A small cross-platform desktop app that turns Excel workbooks (`.xlsx`) into config
+tables, as Lua or JSON.
 
-Point it at a directory of workbooks, and it writes the generated `.lua` files to
-a **client** directory and/or a **server** directory — each side with its own text
-encoding. Fields can be routed to the client only, the server only, or both.
+Point it at a directory of workbooks, and it writes the generated tables to a
+**client** directory and/or a **server** directory — each side with its own text
+encoding and its own output format (`.lua` or `.json`). Fields can be routed to the
+client only, the server only, or both.
 
 Built with Python + Tkinter (ttkbootstrap). Runs on Windows and macOS.
 
@@ -21,6 +22,7 @@ Built with Python + Tkinter (ttkbootstrap). Runs on Windows and macOS.
 - [Requirements](#requirements)
 - [Run from source](#run-from-source)
 - [Using the app](#using-the-app)
+- [Output format](#output-format)
 - [Excel table format](#excel-table-format)
 - [Examples](#examples)
 - [Build a standalone executable](#build-a-standalone-executable)
@@ -31,9 +33,12 @@ Built with Python + Tkinter (ttkbootstrap). Runs on Windows and macOS.
 ## Features
 
 - **One workbook, many tables** — every sheet is parsed on its own and can produce
-  its own `.lua` file.
+  its own output file.
 - **Client / server split** — a per-field `scope` decides where each column goes;
-  each side is written with its own encoding (UTF-8 or GBK).
+  each side is written with its own encoding (UTF-8 or GBK) and format (Lua or JSON).
+- **Two output formats** — `lua` is the script the game loads; `json` is for readers
+  that are not a Lua runtime (build steps, editors, other engines). Both carry the
+  same data; see [Output format](#output-format).
 - **Two table shapes** — flat record tables (`base`) and single-record setting
   tables (`tiny`), plus `key_count` for nested output.
 - **Validate before writing** — Lua-valued cells are syntax-checked and numeric
@@ -76,8 +81,9 @@ selected language; the default is **English**.
 1. **Table directory** — the folder holding your `.xlsx` workbooks. Every `.xlsx`
    in that folder (non-recursive, `~$*` temp files skipped) is scanned; the table
    list on the left shows them.
-2. **Client output** / **Server output** — where generated Lua files go. Either may
-   be left empty; each has its own encoding selector (UTF-8 or GBK).
+2. **Client output** / **Server output** — where the exported files go. Either may be
+   left empty; each has its own encoding selector (UTF-8 or GBK) and format selector
+   (`lua` or `json`, `lua` by default — see [Output format](#output-format)).
 3. **Export Selected** / **Export All** — analyse, then write.
 
 While exporting, the progress bar runs in two phases: the first half is the
@@ -107,12 +113,63 @@ and the choice is written to `config/projects.json`.
 `projects.json` holds the project list, the active project, the table-list sort
 order and the UI language. `theme.json` holds the theme. Delete them to start over.
 
+## Output format
+
+**Client output** and **Server output** each have a format selector right after their
+encoding selector: `lua` (the default) or `json`. The two sides are independent, so the
+client can emit lua while the server emits json.
+
+Only the extension changes. `B2` in the workbook says `cfg_item.lua`; choosing json
+produces `cfg_item.json`, same base name.
+
+### How the two formats line up
+
+| In the sheet | `.lua` | `.json` |
+|---|---|---|
+| `base` table, `key_count = 0` | anonymous list `{ ... }, { ... },` | `[ {...}, {...} ]` |
+| `base` table, `key_count >= 1` | `[1] = { ... },` | `{"1": {...}}` — keys written as strings |
+| two key levels (`key_count = 2`) | `[1] = { [2] = ... }` | `{"1": {"2": ...}}` |
+| empty cell | the field is not written | the field is not written |
+| `number` / `any` cell producing `nil` | `x = nil,` | **the field is not written** |
+| number / boolean | `1500` / `true` | `1500` / `true` |
+| text (`string` column) | `[[text]]`, `[=[a]]b]=]` | `"text"`, `"a]]b"`, escaped per JSON rules |
+| multi-line text (Alt+Enter) | embedded as-is | `"line one\r\nline two"` |
+| a plain literal in a `table` / `any` cell | passed through, e.g. `{10000, "Revive Envoy", 1503}` | native JSON: `[10000, "Revive Envoy", 1503]`; `{quality = 3}` → `{"quality": 3}` |
+| an expression in a `table` / `any` cell | passed through, e.g. `100+50` | not convertible — the cell's text is kept: `"100+50"` |
+| empty `table` cell | `{}` | `[]` |
+| the `--[[ x.xlsx -> Sheet ]]` header comment | present | absent (JSON has no comments) |
+| custom `file_header` / `file_footer` | applied | **not applied** (Lua syntax, no JSON counterpart) |
+
+The rule for a `table` / `any` cell is one sentence: **convert what maps onto JSON
+losslessly, keep the cell's text for the rest.** `{10000, "Revive Envoy", 1503}` is a
+plain literal and becomes an array; `100+50` is an expression, and evaluating it is not
+this tool's job — writing a guessed `150` into the file would be far worse than handing
+the text over. One consequence to plan for: **two rows of the same column can end up as
+an array and a string**, so the reader has to look at the field, not the column.
+
+Two deliberate differences:
+
+- **a `nil` field simply disappears in json.** Lua cannot store nil, so `x = nil` and
+  "there is no x" are the same thing — but JSON *can* store `null`, and writing it would
+  invent a distinction the source does not have.
+- **an empty table is `[]` in json, not `{}`.** Lua has one empty table, JSON has two;
+  a `table` cell builds a sequence in practice, so it is written as `[]`.
+
+### Encoding
+
+json uses the same encoding selector (UTF-8 / GBK). RFC 8259 requires JSON text to be
+UTF-8, though, and a `gbk` file will not load in most JSON parsers — pick it only when
+you know the consumer reads GBK. Line endings stay CRLF, matching the lua output.
+
 ## Excel table format
 
 Each **sheet** is one table. A sheet is treated as a config table only when:
 
 - `B1` is exactly `base` or `tiny`, **and**
-- `B2` is a file name ending in `.lua`
+- `B2` is a file name ending in `.lua`. **That suffix has to say `.lua`** even when you
+  intend to export json: it is the single source of truth for the file name, and the
+  tool swaps the extension itself when json is selected (see
+  [Output format](#output-format)).
 
 Anything else — a cover sheet, an empty sheet, a notes sheet — is silently
 ignored, so you can keep documentation in the same workbook.
@@ -122,7 +179,7 @@ ignored, so you can keep documentation in the same workbook.
 | Cell | Meaning | Example |
 |---|---|---|
 | `B1` | Table kind: `base` or `tiny` | `base` |
-| `B2` | Output file name (must end with `.lua`) | `cfg_item.lua` |
+| `B2` | Output file name (must end with `.lua`; the extension becomes `.json` when exporting json) | `cfg_item.lua` |
 | `B3` | `key_count` — how many fields form the nested key (`base` only) | `1` |
 | `E1` | File header — written before the table | `return {` |
 | `E2` | File footer — written at the end of the file | `}` |
@@ -290,8 +347,8 @@ have the same structure and the same field names — only the human-readable tex
 example/
 ├── en/
 │   ├── import/     source workbooks
-│   ├── client/     generated for the client
-│   └── server/     generated for the server
+│   ├── client/     generated for the client (.lua and .json)
+│   └── server/     generated for the server (.lua and .json)
 └── zh-CN/          the same set with Chinese comments and sample data
 ```
 
@@ -306,6 +363,12 @@ Open the workbooks next to their generated `.lua` output — e.g.
 `en/import/01_types_and_scopes.xlsx` → `en/client/cfg_example_item.lua`. The same
 table produces different files on each side because of `scope`.
 
+Every artifact also has a `.json` twin with the same base name
+(`cfg_example_item.json`), exported from the same workbook by the same parse. That makes
+the two formats a **side-by-side reference**: to see what a field looks like in json,
+open the file next to it. Both are committed, so a change to either format shows up as a
+diff.
+
 Regenerate them with:
 
 ```bash
@@ -314,7 +377,8 @@ python tools/make_examples.py en         # English only
 python tools/make_examples.py zh-CN      # Chinese only
 ```
 
-The generator script doubles as executable documentation of the layout.
+The generator script doubles as executable documentation of the layout, and it exports
+each of them twice, once per format.
 
 ## Build a standalone executable
 
@@ -342,16 +406,18 @@ main.py                     entry point
 core/
   excel_reader.py           workbook -> table dicts, plus cell validation
   lua_writer.py             table dict -> Lua source (field formatting, nesting)
-  exporter.py               writes the .lua files (encoding, CRLF)
+  json_writer.py            table dict -> JSON text (column selection reused from lua_writer)
+  exporter.py               writes the files (encoding, CRLF, atomic replace), routes by format
   lua_syntax.py             Lua literal checker + number checker + error rendering
+  luaparse.py               minimal Lua parser: reads generated output, and converts the
+                            hand-written Lua in a `table` / `any` cell for the json export
   i18n.py                   English / Chinese strings (no Tk dependency)
 gui/
   main_window.py            the Tkinter UI
   platform_compat.py        Windows / macOS differences (fonts, config dir, svn)
 tools/
-  make_examples.py          regenerates example/ (en / zh-CN)
+  make_examples.py          regenerates example/ (en / zh-CN), once per format
   compare_export.py         structural diff of two export directories
-  luaparse.py               minimal Lua parser used by compare_export.py
 example/                    sample workbooks and their generated output (en / zh-CN)
 table_exporter.spec         PyInstaller build description
 ```
@@ -368,6 +434,10 @@ table_exporter.spec         PyInstaller build description
   character instead of dumping a codec error - and never truncates the file.
 - Only two output encodings are offered: `utf-8` and `gbk`. `gbk` covers
   Simplified Chinese game data; pick `utf-8` when the pipeline expects it.
+- **json and lua carry the same data**, field for field, apart from the two deliberate
+  differences listed under [Output format](#output-format). They share the whole write
+  path, so a json file fails on an unencodable character exactly the way a lua one does
+  and leaves the previous file in place.
 - `tools/compare_export.py` compares two output directories by *structure* rather
   than bytes, which is how the exporter was verified against a legacy tool:
   ```bash

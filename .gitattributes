@@ -12,4 +12,6 @@
 
 # 示例导出产物：是"工具的输出",要按原样保存。
 # 导出器固定写 CRLF，若被规范化成 LF，重新生成时整份文件都会被标成已修改。
-example/**/*.lua -text
+# json 走的是同一条写盘路径，换行符也是 CRLF，所以同样要排除在转换之外。
+example/**/*.lua  -text
+example/**/*.json -text

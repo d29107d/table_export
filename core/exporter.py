@@ -2,6 +2,7 @@ import os
 
 from .excel_reader import load_excel
 from .i18n import t
+from .json_writer import generate_json
 from .lua_writer import generate_lua
 
 #: Output encodings offered by the UI, in dropdown order.
@@ -11,6 +12,15 @@ from .lua_writer import generate_lua
 #: used to fail halfway through an export; ``utf-8-sig`` only differs by a BOM.
 #: Both were removed to keep a bad choice from silently corrupting the output.
 ENCODINGS = ("utf-8", "gbk")
+
+#: Output formats offered by the UI, in dropdown order. The first entry is the default.
+#:
+#: ``lua`` is what the game loads; ``json`` exists for readers that are not a Lua
+#: runtime (build steps, editors, other engines). RFC 8259 says JSON is UTF-8, so a
+#: gbk json file is legal only for a consumer that was told to expect one - the
+#: encoding dropdown stays free rather than being locked, because the server side of
+#: a toolkit like this one does sometimes need it.
+FORMATS = ("lua", "json")
 
 #: Codec names no longer offered -> the closest supported one. Lets an existing
 #: ``projects.json`` with a legacy value keep working instead of silently falling
@@ -37,12 +47,45 @@ def normalize_encoding(name):
     return _ENCODING_ALIASES.get(key, ENCODINGS[0])
 
 
+def normalize_format(name):
+    """Fold any format name onto one of :data:`FORMATS`; unknown -> ``lua``.
+
+    Same job as :func:`normalize_encoding`: a ``projects.json`` written before the
+    format existed has no ``*_format`` key at all, and a hand-edited one may hold
+    anything. Both cases have to land on a valid dropdown entry rather than leaving the
+    combobox blank or the export crashing on an unhandled name.
+    """
+    if not isinstance(name, str):
+        return FORMATS[0]
+    key = name.strip().lower()
+    return key if key in FORMATS else FORMATS[0]
+
+
+def output_name(filename, fmt):
+    """``cfg_item.lua`` -> ``cfg_item.json`` when exporting JSON.
+
+    Only the extension is swapped. The workbook's ``output_filename`` cell is required
+    to end in ``.lua`` (see ``excel_reader._parse_meta``), so that name stays the single
+    source of truth for the file name in both formats.
+    """
+    if normalize_format(fmt) == "json":
+        return os.path.splitext(filename)[0] + ".json"
+    return filename
+
+
+def generate(table_info, scope_filter, fmt):
+    """Generate one side of one table in the requested format."""
+    if normalize_format(fmt) == "json":
+        return generate_json(table_info, scope_filter)
+    return generate_lua(table_info, scope_filter)
+
+
 class EncodingError(Exception):
-    """The generated Lua text holds a character the chosen encoding cannot store.
+    """The generated text holds a character the chosen encoding cannot store.
 
     Carries the offending details so the caller can report them: ``filename``,
     ``encoding``, ``char`` and ``position`` (index into the generated text). The
-    target file is left untouched - see :func:`_write_lua_file`.
+    target file is left untouched - see :func:`_write_text_file`.
     """
 
     def __init__(self, filename, encoding, char, position):
@@ -70,25 +113,34 @@ class ExportResult:
         return len(self.success) + len(self.failed)
 
 
-def export_table(filepath, table_info, client_dir, server_dir, client_encoding="utf-8", server_encoding="utf-8"):
+def export_table(filepath, table_info, client_dir, server_dir, client_encoding="utf-8", server_encoding="utf-8",
+                 client_format="lua", server_format="lua"):
+    """Write one table to the client and/or server directory.
+
+    Client and server carry their own format, so a table can be a lua file on one side
+    and a json file on the other - a Lua client next to a service that reads JSON is
+    exactly the shape this is for.
+    """
     result = ExportResult()
     table_name = table_info.get("sheet_name", "unknown")
     filename = table_info.get("output_filename", "output.lua")
 
     try:
         if client_dir:
-            client_code = generate_lua(table_info, "c")
+            name = output_name(filename, client_format)
+            client_code = generate(table_info, "c", client_format)
             if client_code:
-                _write_lua_file(client_dir, filename, client_code,
-                                normalize_encoding(client_encoding))
-                result.add_success(f"[client] {table_name} -> {filename}")
+                _write_text_file(client_dir, name, client_code,
+                                 normalize_encoding(client_encoding))
+                result.add_success(f"[client] {table_name} -> {name}")
 
         if server_dir:
-            server_code = generate_lua(table_info, "s")
+            name = output_name(filename, server_format)
+            server_code = generate(table_info, "s", server_format)
             if server_code:
-                _write_lua_file(server_dir, filename, server_code,
-                                normalize_encoding(server_encoding))
-                result.add_success(f"[server] {table_name} -> {filename}")
+                _write_text_file(server_dir, name, server_code,
+                                 normalize_encoding(server_encoding))
+                result.add_success(f"[server] {table_name} -> {name}")
 
         if not result.success and not result.failed:
             result.add_failed(f"{table_name}: no scopable fields")
@@ -99,7 +151,8 @@ def export_table(filepath, table_info, client_dir, server_dir, client_encoding="
     return result
 
 
-def export_all(filepaths, client_dir, server_dir, client_encoding="utf-8", server_encoding="utf-8", progress_callback=None):
+def export_all(filepaths, client_dir, server_dir, client_encoding="utf-8", server_encoding="utf-8",
+               client_format="lua", server_format="lua", progress_callback=None):
     results = []
     total = len(filepaths)
 
@@ -107,7 +160,9 @@ def export_all(filepaths, client_dir, server_dir, client_encoding="utf-8", serve
         try:
             tables = load_excel(filepath)
             for table_info in tables:
-                r = export_table(filepath, table_info, client_dir, server_dir, client_encoding, server_encoding)
+                r = export_table(filepath, table_info, client_dir, server_dir,
+                                 client_encoding, server_encoding,
+                                 client_format, server_format)
                 results.append(r)
         except Exception as e:
             r = ExportResult()
@@ -120,8 +175,8 @@ def export_all(filepaths, client_dir, server_dir, client_encoding="utf-8", serve
     return results
 
 
-def _write_lua_file(output_dir, filename, content, encoding="utf-8"):
-    """Write one generated Lua file - all or nothing.
+def _write_text_file(output_dir, filename, content, encoding="utf-8"):
+    """Write one generated file - all or nothing.
 
     The text is encoded **before** the target is opened. Encoding first is what
     keeps a failure harmless: ``open(path, "w")`` truncates the file, so the old
@@ -130,6 +185,9 @@ def _write_lua_file(output_dir, filename, content, encoding="utf-8"):
     memory, written to a sibling ``.tmp`` file and swapped in with
     ``os.replace``, so the previous content survives any failure and the game
     never observes a half-written file.
+
+    Shared by both formats: a json file that overflows a narrow encoding has to fail
+    the same way a lua one does, for the same reason.
     """
     os.makedirs(output_dir, exist_ok=True)
     filepath = os.path.join(output_dir, filename)
