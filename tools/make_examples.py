@@ -483,10 +483,10 @@ def build_keys_and_layout(lang, import_dir):
                      shop["cols"], shop["rows"])
 
     tips = c["tips"]              # key count 0 -> one anonymous table element per row
-    # B2 may end in .lua or .json: the extension is not what picks the format, because
-    # client and server have their own format selectors but share this one cell. Naming
-    # this sheet *.json pins that down - the artifacts are still cfg_example_tips.lua and
-    # cfg_example_tips.json, byte for byte what a *.lua B2 produces.
+    # B2 carries the base name only: it is read up to the first dot and the rest is
+    # ignored, the extension coming from the format selector instead. Naming this sheet
+    # *.json pins that down - the artifacts are still cfg_example_tips.lua and
+    # cfg_example_tips.json, byte for byte what any other spelling of the name produces.
     write_base_sheet(wb, lang, tips["sheet"], "cfg_example_tips.json", 0,
                      tips["cols"], tips["rows"])
 
@@ -571,11 +571,16 @@ def clean_outputs(client_dir, server_dir):
 
 
 def export_examples(import_dir, client_dir, server_dir):
-    """按每种格式各导一遍，产物同目录同基名（``cfg_x.lua`` 与 ``cfg_x.json`` 并排）。
+    """Export each workbook once per format, so the twins land side by side.
 
-    两种格式都进 example/，是为了让「示例即规范」这条约定同样覆盖 json：谁改动了
-    任一种输出，diff 里都会立刻看到，不用等到消费方发现字段对不上。
-    每份工作簿只读一次，两种格式复用同一份解析结果。
+    ``cfg_x.lua`` and ``cfg_x.json`` share a base name because the format is the
+    selector's business and never the workbook's: B2 only names the table, and it is
+    read up to the first dot with the rest ignored. Keeping both formats in ``example/``
+    extends "the example is the spec" to json as well - a change to either output shows
+    up in a diff instead of surfacing at the consumer.
+
+    Each workbook is parsed once and both formats reuse that parse, so the pair cannot
+    drift from being read twice.
     """
     tables = []
     for path in sorted(list_excel_files(import_dir)):

@@ -64,11 +64,11 @@ def normalize_format(name):
 def output_name(filename, fmt):
     """``cfg_item.lua`` -> ``cfg_item.json`` when exporting JSON.
 
-    Only the extension is swapped, so the name in the workbook stays the single source of
-    truth for the base name in both formats. ``excel_reader._parse_meta`` hands this
-    function a name that always ends in ``.lua`` whatever the sheet's B2 cell said - the
-    cell's own extension is not what picks the format, because client and server share B2
-    but have independent format selectors.
+    Only the extension is swapped, so the base name in the workbook stays the single source
+    of truth for both formats. The cell is read up to its first dot
+    (``excel_reader._output_base_name``) and stored normalised to ``.lua``, so whatever B2
+    said - ``cfg_item``, ``cfg_item.lua``, ``cfg_item.json`` - this function reduces it to
+    ``cfg_item`` plus the extension the side's format selector asked for.
     """
     if normalize_format(fmt) == "json":
         return os.path.splitext(filename)[0] + ".json"

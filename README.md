@@ -119,10 +119,18 @@ order and the UI language. `theme.json` holds the theme. Delete them to start ov
 encoding selector: `lua` (the default) or `json`. The two sides are independent, so the
 client can emit lua while the server emits json.
 
-Only the extension changes. `B2` in the workbook says `cfg_item.lua`; choosing json
-produces `cfg_item.json`, same base name. Writing `cfg_item.json` in `B2` gives the very
-same pair — only the base name is read there, and the extension always comes from the
-format selector.
+**The output file name is what `B2` holds before its first dot, plus the extension of that
+side's format.** Everything from the dot on is ignored: client and server share this one
+cell but each has its own format selector, so one cell cannot name two extensions.
+
+| `B2` says | client set to `lua` | server set to `json` |
+|---|---|---|
+| `test` | `test.lua` | `test.json` |
+| `test.json` | `test.lua` | `test.json` |
+| `test.lua` | `test.lua` | `test.json` |
+
+All three rows come out the same — the `.json` in `test.json` does not make the table
+json, and the client still emits `test.lua`.
 
 ### How the two formats line up
 
@@ -168,13 +176,13 @@ you know the consumer reads GBK. Line endings stay CRLF, matching the lua output
 Each **sheet** is one table. A sheet is treated as a config table only when:
 
 - `B1` is exactly `base` or `tiny`, **and**
-- `B2` is a file name ending in `.lua` or `.json`. **The suffix is not what picks the
-  format**: client and server share this one cell but each has its own format selector,
-  so one cell cannot name two extensions. Only the base name is taken; the extension
-  comes from the format selector (see [Output format](#output-format)).
+- `B2` is the output file name. **Only what precedes its first dot is used**: that is the
+  base name, and the extension comes from the side's format selector (see
+  [Output format](#output-format)), so `cfg_item`, `cfg_item.lua` and `cfg_item.json` all
+  name the same table.
 
-A `B2` that ends in neither `.lua` nor `.json` skips the sheet — but **not silently**:
-the log names the sheet and quotes the current value, so it is a one-cell fix.
+An empty `B2` skips the sheet — but **not silently**: the log names the sheet and quotes
+the current value, so it is a one-cell fix.
 
 Anything else — a cover sheet, an empty sheet, a notes sheet — is silently
 ignored, so you can keep documentation in the same workbook.
@@ -184,7 +192,7 @@ ignored, so you can keep documentation in the same workbook.
 | Cell | Meaning | Example |
 |---|---|---|
 | `B1` | Table kind: `base` or `tiny` | `base` |
-| `B2` | Output file name (either suffix works; only the base name is used, the extension comes from the format selector) | `cfg_item.lua` |
+| `B2` | Output file name (only what precedes the first dot is used; the extension comes from the format selector) | `cfg_item.lua` |
 | `B3` | `key_count` — how many fields form the nested key (`base` only) | `1` |
 | `E1` | File header — written before the table | `return {` |
 | `E2` | File footer — written at the end of the file | `}` |

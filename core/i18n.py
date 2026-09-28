@@ -180,10 +180,9 @@ _STRINGS = {
         "发现 {n} 处数据错误，已中断导出（尚未写入任何文件）。",
     ),
     "log.sheet_skipped_name": (
-        'sheet "{sheet}" skipped: B2 (the output file) has to end in .lua or .json, '
-        'but it is "{name}"',
-        "已跳过工作表「{sheet}」：B2（导出文件）必须以 .lua 或 .json 结尾，"
-        "当前是「{name}」",
+        'sheet "{sheet}" skipped: B2 (the output file) holds no file name - it is '
+        '"{name}"',
+        "已跳过工作表「{sheet}」：B2（导出文件）没有填文件名，当前是「{name}」",
     ),
     "log.empty_cell": ("(empty)", "（空）"),
     "log.svn_no_tortoise": (

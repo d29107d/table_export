@@ -212,20 +212,6 @@ def _cell_value(ws, row, col):
     return ws.cell(row=row, column=col).value
 
 
-#: Suffixes accepted in the ``output_filename`` cell (B2).
-#:
-#: B2 holds the output *file name*, and its extension is **not** what picks the format:
-#: client and server have their own format selectors but share this one cell, so a single
-#: cell cannot name two extensions. Both suffixes are accepted and only the base name is
-#: kept - the extension that matches the format actually chosen is appended later, and
-#: the name is stored normalised to ``.lua`` (:func:`_parse_meta`), which is what every
-#: other part of the tool expects.
-#:
-#: Requiring ``.lua`` alone was a trap once the UI offered json: picking json and then
-#: writing ``cfg_item.json`` here looked right, and dropped the whole sheet without a word.
-_NAME_SUFFIXES = (".lua", ".json")
-
-
 def _sheet_export_type(ws):
     """``B1`` folded to lower case; "" when the cell is empty."""
     raw = _cell_value(ws, 1, 2)
@@ -238,16 +224,33 @@ def _sheet_output_name(ws):
     return str(raw).strip() if raw is not None else ""
 
 
+def _output_base_name(ws):
+    """``B2`` reduced to a base name: everything before the first dot, stripped.
+
+    The cell carries the output file's *base name* and nothing else about the name is
+    read from it - what follows a dot is ignored. The extension belongs to the format
+    selector, and client and server each pick their own while sharing this one cell, so
+    an extension written here would be right for one side and wrong for the other.
+    ``cfg_item``, ``cfg_item.lua`` and ``cfg_item.json`` therefore all name the same
+    table.
+
+    Splitting on the *first* dot rather than the last is what ``test.json`` -> ``test``
+    needs, and it keeps the rule easy to state: read up to the first dot, drop the rest.
+    """
+    return _sheet_output_name(ws).split(".", 1)[0].strip()
+
+
 def _parse_meta(ws):
     """Parse the table-level metadata.
 
     Returns None for a sheet that is not a configuration table (a notes page, an
-    empty sheet, a badly formatted key sheet); the caller skips it. The rule matches
-    the legacy exporter: B1 must be ``base`` / ``tiny`` and B2 a file name ending in
-    ``.lua`` or ``.json``.
+    empty sheet, a badly formatted key sheet); the caller skips it. The rule is: B1
+    must be ``base`` / ``tiny`` and B2 must hold a name, of which only the base name is
+    used - see :func:`_output_base_name`.
 
-    The name is stored with a ``.lua`` extension whatever the cell says, so that the
-    parts that consume it (the file writer, ``tools/compare_export.py``) see one shape.
+    The name is stored normalised to ``.lua`` whatever the cell said, so that everything
+    consuming it (the file writer, ``tools/compare_export.py``) sees one shape, and
+    :func:`core.exporter.output_name` only has to swap the extension.
     """
     meta = {}
 
@@ -256,10 +259,10 @@ def _parse_meta(ws):
         return None
     meta["export_type"] = export_type
 
-    output_filename = _sheet_output_name(ws)
-    if not output_filename.lower().endswith(_NAME_SUFFIXES):
+    base_name = _output_base_name(ws)
+    if not base_name:
         return None
-    meta["output_filename"] = os.path.splitext(output_filename)[0] + ".lua"
+    meta["output_filename"] = base_name + ".lua"
 
     val = _cell_value(ws, 1, 5)
     meta["file_header"] = str(val) if val is not None else ""
@@ -280,9 +283,14 @@ def skipped_sheet_note(ws):
     """Why a sheet that *looks* like a config table still produced no output, or None.
 
     Only one case is reported: ``B1`` says ``base`` / ``tiny`` - the author meant this
-    sheet to be a table - but ``B2`` is not a usable file name. That is always a typo,
-    and it used to disappear without a trace: the log said "0 succeeded, 0 failed" and
-    left nothing to act on.
+    sheet to be a table - but ``B2`` holds no name. That is always a typo, and it used
+    to disappear without a trace: the log said "0 succeeded, 0 failed" and left nothing
+    to act on.
+
+    Anything else in ``B2`` is accepted, because the cell is only read up to its first
+    dot and an extension is ignored: there is no way to get it "wrong" short of leaving
+    it empty. Requiring a particular suffix here is what once dropped a whole sheet -
+    the author had written the name with the extension they were about to export as.
 
     A sheet whose ``B1`` is not a table kind at all (a cover page, a notes page) is
     skipped on purpose and stays silent, and so does a table that parses fine but has
@@ -292,10 +300,10 @@ def skipped_sheet_note(ws):
     export_type = _sheet_export_type(ws)
     if export_type not in ("base", "tiny"):
         return None
-    name = _sheet_output_name(ws)
-    if name.lower().endswith(_NAME_SUFFIXES):
+    if _output_base_name(ws):
         return None
-    return t("log.sheet_skipped_name", sheet=ws.title, name=name or t("log.empty_cell"))
+    return t("log.sheet_skipped_name", sheet=ws.title,
+             name=_sheet_output_name(ws) or t("log.empty_cell"))
 
 
 def _parse_base(ws, meta):
